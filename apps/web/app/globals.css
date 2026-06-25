@@ -89,3 +89,26 @@ body {
   background-size: 200% 200%;
   animation: border-flow 6s linear infinite;
 }
+@keyframes glow {
+
+    0%{
+        filter:drop-shadow(0 0 18px rgba(59,130,246,.30));
+    }
+
+    50%{
+        filter:drop-shadow(0 0 34px rgba(139,92,246,.55));
+    }
+
+    100%{
+        filter:drop-shadow(0 0 18px rgba(59,130,246,.30));
+    }
+
+}
+
+.logo-float{
+
+    animation:
+        float 5s ease-in-out infinite,
+        glow 4s ease-in-out infinite;
+
+}

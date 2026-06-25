@@ -374,12 +374,31 @@ export default function Home() {
           </div>
         </div>
 
-        <footer className="mt-10 text-center text-sm text-white/35">
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-sm text-white/70 shadow-2xl backdrop-blur">
-            <span className="h-2 w-2 rounded-full bg-blue-400 shadow-[0_0_18px_rgba(96,165,250,0.9)]" />
-            PERSONAL CLOUD
-          </div>
-        </footer>
+       <footer className="mt-10 flex flex-col items-center gap-4 text-center">
+  <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-sm text-white/70 shadow-2xl backdrop-blur">
+    <span className="h-2 w-2 rounded-full bg-blue-400 shadow-[0_0_18px_rgba(96,165,250,0.9)]" />
+    PERSONAL CLOUD
+  </div>
+
+  <a
+    href="https://heros20.github.io/Portfolio-2.0/"
+    target="_blank"
+    rel="noopener noreferrer"
+    className="group inline-flex items-center gap-2 text-sm text-white/40 transition hover:text-white"
+  >
+    <Image
+      src="/logo.svg"
+      alt="KB"
+      width={26}
+      height={26}
+      className="transition-transform duration-300 group-hover:scale-110"
+    />
+
+    <span>
+      Site réalisé par <strong className="font-semibold">KB</strong>
+    </span>
+  </a>
+</footer>
       </section>
     </main>
   );

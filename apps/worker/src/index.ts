@@ -1,0 +1,251 @@
+import { nanoid } from "nanoid";
+
+export interface Env {
+  DB: D1Database;
+  FILES_BUCKET: R2Bucket;
+  APP_URL: string;
+}
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      ...corsHeaders,
+    },
+  });
+}
+
+async function sha256(value: string) {
+  const data = new TextEncoder().encode(value);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+
+  return [...new Uint8Array(hash)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export default {
+  async fetch(request: Request, env: Env) {
+    const url = new URL(request.url);
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders,
+      });
+    }
+
+    if (request.method === "GET" && url.pathname === "/health") {
+      return json({ ok: true });
+    }
+
+    if (request.method === "POST" && url.pathname === "/transfers") {
+      const body = await request.json<{
+        title?: string;
+        password?: string;
+        expiresInDays?: number;
+        files: {
+          name: string;
+          size: number;
+          type?: string;
+        }[];
+      }>();
+
+      if (!body.files?.length) {
+        return json({ error: "Aucun fichier fourni." }, 400);
+      }
+
+      const transferId = nanoid();
+      const slug = nanoid(12);
+      const now = new Date();
+      const expiresInDays = body.expiresInDays ?? 7;
+      const expiresAt = new Date(
+        now.getTime() + expiresInDays * 24 * 60 * 60 * 1000
+      );
+
+      const passwordHash = body.password ? await sha256(body.password) : null;
+
+      await env.DB.prepare(
+        `INSERT INTO transfers 
+        (id, slug, title, password_hash, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          transferId,
+          slug,
+          body.title ?? null,
+          passwordHash,
+          expiresAt.toISOString(),
+          now.toISOString()
+        )
+        .run();
+
+      const uploadFiles = [];
+
+      for (const file of body.files) {
+        const fileId = nanoid();
+        const safeName = file.name.replace(/[^\w.\-() ]+/g, "_");
+        const r2Key = `${transferId}/${fileId}-${safeName}`;
+
+        await env.DB.prepare(
+          `INSERT INTO files 
+          (id, transfer_id, original_name, r2_key, size, mime_type, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+          .bind(
+            fileId,
+            transferId,
+            file.name,
+            r2Key,
+            file.size,
+            file.type ?? null,
+            now.toISOString()
+          )
+          .run();
+
+        uploadFiles.push({
+          id: fileId,
+          name: file.name,
+          r2Key,
+          uploadUrl: `${url.origin}/upload/${fileId}`,
+        });
+      }
+
+      return json({
+        slug,
+        downloadUrl: `${env.APP_URL}/d/${slug}`,
+        files: uploadFiles,
+      });
+    }
+
+    if (request.method === "PUT" && url.pathname.startsWith("/upload/")) {
+      const fileId = url.pathname.replace("/upload/", "");
+
+      const file = await env.DB.prepare(
+        `SELECT r2_key, mime_type FROM files WHERE id = ?`
+      )
+        .bind(fileId)
+        .first<{ r2_key: string; mime_type: string | null }>();
+
+      if (!file) {
+        return json({ error: "Fichier introuvable." }, 404);
+      }
+
+      await env.FILES_BUCKET.put(file.r2_key, request.body, {
+        httpMetadata: {
+          contentType: file.mime_type ?? "application/octet-stream",
+        },
+      });
+
+      return json({ ok: true });
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/transfers/")) {
+      const slug = url.pathname.replace("/transfers/", "");
+
+      const transfer = await env.DB.prepare(
+        `SELECT id, slug, title, password_hash, expires_at, created_at
+         FROM transfers
+         WHERE slug = ?`
+      )
+        .bind(slug)
+        .first<{
+          id: string;
+          slug: string;
+          title: string | null;
+          password_hash: string | null;
+          expires_at: string;
+          created_at: string;
+        }>();
+
+      if (!transfer) {
+        return json({ error: "Transfert introuvable." }, 404);
+      }
+
+      if (new Date(transfer.expires_at) < new Date()) {
+        return json({ error: "Transfert expiré." }, 410);
+      }
+
+      const files = await env.DB.prepare(
+        `SELECT id, original_name, size, mime_type
+         FROM files
+         WHERE transfer_id = ?`
+      )
+        .bind(transfer.id)
+        .all();
+
+      return json({
+        slug: transfer.slug,
+        title: transfer.title,
+        protected: Boolean(transfer.password_hash),
+        expiresAt: transfer.expires_at,
+        files: files.results,
+      });
+    }
+
+    if (request.method === "POST" && url.pathname.startsWith("/download/")) {
+      const fileId = url.pathname.replace("/download/", "");
+      const body = await request.json<{ password?: string }>();
+
+      const row = await env.DB.prepare(
+        `SELECT 
+          f.r2_key,
+          f.original_name,
+          t.password_hash,
+          t.expires_at
+        FROM files f
+        JOIN transfers t ON t.id = f.transfer_id
+        WHERE f.id = ?`
+      )
+        .bind(fileId)
+        .first<{
+          r2_key: string;
+          original_name: string;
+          password_hash: string | null;
+          expires_at: string;
+        }>();
+
+      if (!row) {
+        return json({ error: "Fichier introuvable." }, 404);
+      }
+
+      if (new Date(row.expires_at) < new Date()) {
+        return json({ error: "Transfert expiré." }, 410);
+      }
+
+      if (row.password_hash) {
+        const givenHash = body.password ? await sha256(body.password) : "";
+
+        if (givenHash !== row.password_hash) {
+          return json({ error: "Mot de passe incorrect." }, 401);
+        }
+      }
+
+      const object = await env.FILES_BUCKET.get(row.r2_key);
+
+      if (!object) {
+        return json({ error: "Objet R2 introuvable." }, 404);
+      }
+
+      return new Response(object.body, {
+        headers: {
+          "Content-Type":
+            object.httpMetadata?.contentType ?? "application/octet-stream",
+          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(
+            row.original_name
+          )}`,
+          ...corsHeaders,
+        },
+      });
+    }
+
+    return json({ error: "Route inconnue." }, 404);
+  },
+};

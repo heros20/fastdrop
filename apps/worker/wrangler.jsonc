@@ -1,0 +1,24 @@
+{
+  "name": "fastdrop-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-25",
+
+  "r2_buckets": [
+    {
+      "binding": "FILES_BUCKET",
+      "bucket_name": "fastdrop-files"
+    }
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "fastdrop-db",
+      "database_id": "8b131c8b-4cb8-4ca3-9008-2d08b112ecc7"
+    }
+  ],
+
+  "vars": {
+    "APP_URL": "http://localhost:3000"
+  }
+}

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useRef, useState } from "react";
 
 const API = process.env.NEXT_PUBLIC_API_URL!;
@@ -26,6 +27,7 @@ export default function Home() {
   const [link, setLink] = useState("");
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
 
   function addFiles(fileList: FileList | null) {
     if (!fileList) return;
@@ -40,7 +42,6 @@ export default function Home() {
 
       xhr.upload.onprogress = (event) => {
         if (!event.lengthComputable) return;
-
         const fileProgress = event.loaded / event.total;
         const globalProgress = ((index + fileProgress) / files.length) * 100;
         setProgress(Math.round(globalProgress));
@@ -69,9 +70,7 @@ export default function Home() {
     try {
       const response = await fetch(`${API}/transfers`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: files.length === 1 ? files[0].name : `${files.length} fichiers`,
           expiresInDays,
@@ -84,9 +83,7 @@ export default function Home() {
         }),
       });
 
-      if (!response.ok) {
-        throw new Error("Impossible de créer le transfert.");
-      }
+      if (!response.ok) throw new Error("Impossible de créer le transfert.");
 
       const data = await response.json();
       const uploadFiles: UploadResponseFile[] = data.files;
@@ -113,144 +110,228 @@ export default function Home() {
   const totalSize = files.reduce((sum, file) => sum + file.size, 0);
 
   return (
-    <main className="min-h-screen bg-[#070A12] text-white">
-      <section className="mx-auto flex min-h-screen max-w-4xl flex-col items-center justify-center px-6 py-12">
+    <main className="fastdrop-bg relative min-h-screen overflow-hidden text-white">
+      <div className="noise pointer-events-none absolute inset-0 opacity-30" />
+
+      <div className="glow-pulse pointer-events-none absolute left-1/2 top-20 h-80 w-80 -translate-x-1/2 rounded-full bg-blue-500/30 blur-[120px]" />
+      <div className="pointer-events-none absolute right-[-10%] top-32 h-96 w-96 rounded-full bg-violet-600/20 blur-[140px]" />
+
+      <header className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
+        <div className="flex items-center gap-3">
+          <Image src="/logo.svg" alt="FastDrop" width={38} height={38} priority />
+          <span className="text-lg font-semibold tracking-tight">
+            Fast<span className="text-blue-400">Drop</span>
+          </span>
+        </div>
+
+        <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs text-white/50">
+          Privé · Simple · Rapide
+        </div>
+      </header>
+
+      <section className="relative z-10 mx-auto flex max-w-6xl flex-col items-center px-6 pb-14 pt-6">
         <div className="mb-10 text-center">
-          <div className="mb-4 inline-flex rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/70">
+          <Image
+            src="/logo.svg"
+            alt="FastDrop"
+            width={130}
+            height={130}
+            priority
+            className="logo-float mx-auto mb-8 drop-shadow-[0_0_45px_rgba(59,130,246,0.55)]"
+          />
+
+          <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-sm text-white/70 shadow-2xl backdrop-blur">
+            <span className="h-2 w-2 rounded-full bg-blue-400 shadow-[0_0_18px_rgba(96,165,250,0.9)]" />
             FastDrop — partage privé de fichiers
           </div>
 
-          <h1 className="text-5xl font-bold tracking-tight md:text-7xl">
-            Envoie tes gros fichiers.
+          <h1 className="text-5xl font-black tracking-tight md:text-7xl">
+            Envoie tes{" "}
+            <span className="bg-gradient-to-r from-blue-400 via-indigo-400 to-violet-500 bg-clip-text text-transparent">
+              gros fichiers.
+            </span>
           </h1>
 
-          <p className="mt-5 text-lg text-white/60">
+          <p className="mx-auto mt-5 max-w-2xl text-lg leading-8 text-slate-300">
             Simple, rapide, sans blabla. Tu déposes, tu copies le lien, terminé.
           </p>
+
+          <div className="mx-auto mt-8 grid max-w-3xl gap-3 md:grid-cols-3">
+            {[
+              ["Privé", "Tes fichiers restent à toi"],
+              ["Rapide", "Upload et téléchargement"],
+              ["Contrôlé", "Expiration et mot de passe"],
+            ].map(([title, text]) => (
+              <div
+                key={title}
+                className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-left backdrop-blur"
+              >
+                <p className="text-sm font-semibold text-white">{title}</p>
+                <p className="mt-1 text-xs text-white/45">{text}</p>
+              </div>
+            ))}
+          </div>
         </div>
 
-        <div className="w-full rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-2xl backdrop-blur">
-          <div
-            onClick={() => inputRef.current?.click()}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault();
-              addFiles(event.dataTransfer.files);
-            }}
-            className="flex min-h-64 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-white/20 bg-black/20 p-8 text-center transition hover:border-white/40 hover:bg-white/[0.06]"
-          >
-            <input
-              ref={inputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={(event) => addFiles(event.target.files)}
-            />
+        <div className="gradient-border w-full rounded-[2rem] p-[1px] shadow-[0_0_80px_rgba(37,99,235,0.16)]">
+          <div className="rounded-[2rem] bg-[#070b18]/90 p-5 backdrop-blur-xl md:p-7">
+            <div
+              onClick={() => inputRef.current?.click()}
+              onDragEnter={() => setIsDragging(true)}
+              onDragLeave={() => setIsDragging(false)}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                setIsDragging(false);
+                addFiles(event.dataTransfer.files);
+              }}
+              className={[
+                "group flex min-h-72 cursor-pointer flex-col items-center justify-center rounded-[1.5rem] border border-dashed p-8 text-center transition duration-300",
+                isDragging
+                  ? "scale-[1.015] border-violet-400 bg-violet-500/10"
+                  : "border-white/15 bg-black/25 hover:scale-[1.01] hover:border-blue-400/70 hover:bg-white/[0.05]",
+              ].join(" ")}
+            >
+              <input
+                ref={inputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(event) => addFiles(event.target.files)}
+              />
 
-            <div className="mb-4 text-5xl">⬆️</div>
-            <h2 className="text-2xl font-semibold">Glisse tes fichiers ici</h2>
-            <p className="mt-2 text-white/50">ou clique pour sélectionner</p>
-          </div>
+              <Image
+                src="/logo.svg"
+                alt=""
+                width={76}
+                height={76}
+                className="logo-float mb-5 drop-shadow-[0_0_35px_rgba(139,92,246,0.55)]"
+              />
 
-          {files.length > 0 && (
-            <div className="mt-6 space-y-5">
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className="font-semibold">Fichiers</h3>
-                  <span className="text-sm text-white/50">
-                    {files.length} fichier(s) — {formatSize(totalSize)}
-                  </span>
-                </div>
-
-                <div className="space-y-2">
-                  {files.map((file) => (
-                    <div
-                      key={`${file.name}-${file.size}`}
-                      className="flex items-center justify-between rounded-xl bg-white/[0.04] px-4 py-3"
-                    >
-                      <span className="truncate pr-4">{file.name}</span>
-                      <span className="shrink-0 text-sm text-white/50">
-                        {formatSize(file.size)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="block">
-                  <span className="mb-2 block text-sm text-white/60">Expiration</span>
-                  <select
-                    value={expiresInDays}
-                    onChange={(event) => setExpiresInDays(Number(event.target.value))}
-                    className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white outline-none"
-                  >
-                    <option value={1}>24 heures</option>
-                    <option value={7}>7 jours</option>
-                    <option value={30}>30 jours</option>
-                  </select>
-                </label>
-
-                <label className="block">
-                  <span className="mb-2 block text-sm text-white/60">
-                    Mot de passe optionnel
-                  </span>
-                  <input
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    type="password"
-                    placeholder="Laisser vide si inutile"
-                    className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white outline-none placeholder:text-white/30"
-                  />
-                </label>
-              </div>
-
-              {loading && (
-                <div>
-                  <div className="mb-2 flex justify-between text-sm text-white/60">
-                    <span>Upload en cours</span>
-                    <span>{progress}%</span>
-                  </div>
-                  <div className="h-3 overflow-hidden rounded-full bg-white/10">
-                    <div
-                      className="h-full rounded-full bg-white transition-all"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
+              <h2 className="text-3xl font-bold">Glisse tes fichiers ici</h2>
+              <p className="mt-2 text-white/50">ou clique pour sélectionner</p>
 
               <button
-                onClick={createTransfer}
-                disabled={loading}
-                className="w-full rounded-2xl bg-white px-6 py-4 font-semibold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-50"
+                type="button"
+                className="mt-7 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 px-6 py-3 font-semibold shadow-[0_15px_45px_rgba(79,70,229,0.35)] transition group-hover:-translate-y-1"
               >
-                {loading ? "Upload..." : "Créer le lien"}
+                Choisir des fichiers
               </button>
             </div>
-          )}
 
-          {link && (
-            <div className="mt-6 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-5">
-              <h3 className="mb-3 font-semibold text-emerald-200">Upload terminé</h3>
+            {files.length > 0 && (
+              <div className="mt-6 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+                <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+                  <div className="mb-4 flex items-center justify-between">
+                    <h3 className="font-semibold">Fichiers sélectionnés</h3>
+                    <span className="rounded-full bg-violet-500/20 px-3 py-1 text-sm text-violet-200">
+                      {files.length}
+                    </span>
+                  </div>
 
-              <div className="flex gap-2">
-                <input
-                  value={link}
-                  readOnly
-                  className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
-                />
+                  <div className="space-y-2">
+                    {files.map((file) => (
+                      <div
+                        key={`${file.name}-${file.size}`}
+                        className="flex items-center justify-between rounded-2xl border border-white/5 bg-black/25 px-4 py-3"
+                      >
+                        <span className="truncate pr-4 text-sm">{file.name}</span>
+                        <span className="shrink-0 text-sm text-blue-200">
+                          {formatSize(file.size)}
+                        </span>
+                      </div>
+                    ))}
+
+                    <div className="flex justify-between rounded-2xl bg-black/35 px-4 py-3 font-semibold">
+                      <span>Total</span>
+                      <span className="text-blue-300">{formatSize(totalSize)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-5">
+                  <label className="block rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+                    <span className="mb-3 block text-sm font-semibold text-white/80">
+                      Expiration du lien
+                    </span>
+                    <select
+                      value={expiresInDays}
+                      onChange={(event) => setExpiresInDays(Number(event.target.value))}
+                      className="w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition focus:border-blue-400 focus:shadow-[0_0_30px_rgba(59,130,246,0.25)]"
+                    >
+                      <option value={1}>24 heures</option>
+                      <option value={7}>7 jours</option>
+                      <option value={30}>30 jours</option>
+                    </select>
+                  </label>
+
+                  <label className="block rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+                    <span className="mb-3 block text-sm font-semibold text-white/80">
+                      Mot de passe optionnel
+                    </span>
+                    <input
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      type="password"
+                      placeholder="Laisser vide si inutile"
+                      className="w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-violet-400 focus:shadow-[0_0_30px_rgba(139,92,246,0.25)]"
+                    />
+                  </label>
+                </div>
+
+                {loading && (
+                  <div className="lg:col-span-2">
+                    <div className="mb-2 flex justify-between text-sm text-white/60">
+                      <span>Upload en cours</span>
+                      <span>{progress}%</span>
+                    </div>
+
+                    <div className="h-4 overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-blue-500 to-violet-600 transition-all"
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <button
-                  onClick={copyLink}
-                  className="rounded-xl bg-white px-5 py-3 font-semibold text-black"
+                  onClick={createTransfer}
+                  disabled={loading}
+                  className="lg:col-span-2 w-full rounded-2xl bg-gradient-to-r from-blue-500 via-indigo-500 to-violet-600 px-6 py-4 text-lg font-bold text-white shadow-[0_18px_55px_rgba(79,70,229,0.35)] transition hover:-translate-y-1 hover:shadow-[0_24px_70px_rgba(79,70,229,0.5)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Copier
+                  {loading ? "Upload en cours..." : "Créer le lien de partage"}
                 </button>
               </div>
-            </div>
-          )}
+            )}
+
+            {link && (
+              <div className="mt-6 rounded-3xl border border-emerald-400/20 bg-emerald-400/10 p-5">
+                <h3 className="mb-3 font-semibold text-emerald-200">Upload terminé</h3>
+
+                <div className="flex flex-col gap-3 md:flex-row">
+                  <input
+                    value={link}
+                    readOnly
+                    className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
+                  />
+
+                  <button
+                    onClick={copyLink}
+                    className="rounded-2xl bg-white px-6 py-3 font-bold text-black transition hover:bg-blue-100"
+                  >
+                    Copier
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
+
+        <footer className="mt-10 text-center text-sm text-white/35">
+          <Image src="/logo.svg" alt="" width={28} height={28} className="mx-auto mb-3 opacity-80" />
+          FastDrop — partage privé de fichiers.
+        </footer>
       </section>
     </main>
   );

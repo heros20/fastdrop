@@ -121,14 +121,14 @@ export default function Home() {
   <div className="relative">
     <div className="absolute inset-0 rounded-full bg-blue-500/40 blur-xl scale-150" />
 
-    <Image
-      src="/logo.svg"
-      alt="FastDrop"
-      width={52}
-      height={52}
-      priority
-      className="relative logo-float drop-shadow-[0_0_40px_rgba(59,130,246,.6)]"
-    />
+<Image
+  src="/logo.svg"
+  alt="FastDrop"
+  width={52}
+  height={52}
+  priority
+  className="relative transition-transform duration-300 hover:scale-105 drop-shadow-[0_0_28px_rgba(59,130,246,.45)]"
+/>
   </div>
 
   <div>
@@ -167,7 +167,7 @@ export default function Home() {
           </h1>
 
           <p className="mx-auto mt-4 max-w-2xl text-lg leading-8 text-slate-300">
-            Simple, rapide, sans blabla. Tu déposes, tu copies le lien, terminé.
+            Simple, rapide. Tu déposes, tu copies le lien, terminé.
           </p>
 
           <div className="mx-auto mt-8 grid max-w-3xl gap-3 md:grid-cols-3">

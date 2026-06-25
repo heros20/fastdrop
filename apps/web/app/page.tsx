@@ -18,6 +18,38 @@ function formatSize(size: number) {
   return `${(size / 1024 / 1024 / 1024).toFixed(2)} Go`;
 }
 
+function getFileIcon(file: File) {
+  const name = file.name.toLowerCase();
+  const type = file.type.toLowerCase();
+
+  if (type.startsWith("image/")) return "🖼️";
+  if (type.startsWith("video/")) return "🎬";
+  if (type.startsWith("audio/")) return "🎵";
+
+  if (name.endsWith(".zip") || name.endsWith(".rar") || name.endsWith(".7z")) return "🗜️";
+  if (name.endsWith(".pdf")) return "📕";
+  if (name.endsWith(".doc") || name.endsWith(".docx")) return "📘";
+  if (name.endsWith(".xls") || name.endsWith(".xlsx") || name.endsWith(".csv")) return "📗";
+  if (name.endsWith(".ppt") || name.endsWith(".pptx")) return "📙";
+
+  if (
+    name.endsWith(".js") ||
+    name.endsWith(".ts") ||
+    name.endsWith(".tsx") ||
+    name.endsWith(".jsx") ||
+    name.endsWith(".html") ||
+    name.endsWith(".css") ||
+    name.endsWith(".json") ||
+    name.endsWith(".svg") ||
+    name.endsWith(".xml") ||
+    name.endsWith(".md")
+  ) {
+    return "💻";
+  }
+
+  return "📄";
+}
+
 export default function Home() {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -118,32 +150,32 @@ export default function Home() {
 
       <header className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
         <div className="flex items-center gap-4">
-  <div className="relative">
-    <div className="absolute inset-0 rounded-full bg-blue-500/40 blur-xl scale-150" />
+          <div className="relative">
+            <div className="absolute inset-0 scale-150 rounded-full bg-blue-500/40 blur-xl" />
 
-<Image
-  src="/logo.svg"
-  alt="FastDrop"
-  width={52}
-  height={52}
-  priority
-  className="relative transition-transform duration-300 hover:scale-105 drop-shadow-[0_0_28px_rgba(59,130,246,.45)]"
-/>
-  </div>
+            <Image
+              src="/logo.svg"
+              alt="FastDrop"
+              width={52}
+              height={52}
+              priority
+              className="relative transition-transform duration-300 hover:scale-105 drop-shadow-[0_0_28px_rgba(59,130,246,.45)]"
+            />
+          </div>
 
-  <div>
-    <h2 className="text-2xl font-black tracking-tight">
-      <span className="text-white">Fast</span>
-      <span className="bg-gradient-to-r from-sky-400 via-blue-400 to-violet-500 bg-clip-text text-transparent">
-        Drop
-      </span>
-    </h2>
+          <div>
+            <h2 className="text-2xl font-black tracking-tight">
+              <span className="text-white">Fast</span>
+              <span className="bg-gradient-to-r from-sky-400 via-blue-400 to-violet-500 bg-clip-text text-transparent">
+                Drop
+              </span>
+            </h2>
 
-    <p className="text-xs uppercase tracking-[0.30em] text-white/35">
-      Private File Sharing
-    </p>
-  </div>
-</div>
+            <p className="text-xs uppercase tracking-[0.30em] text-white/35">
+              Personal Cloud
+            </p>
+          </div>
+        </div>
 
         <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs text-white/50">
           Privé · Simple · Rapide
@@ -152,13 +184,6 @@ export default function Home() {
 
       <section className="relative z-10 mx-auto flex max-w-6xl flex-col items-center px-6 pb-14 pt-6">
         <div className="mb-8 text-center">
-         
-
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-sm text-white/70 shadow-2xl backdrop-blur">
-            <span className="h-2 w-2 rounded-full bg-blue-400 shadow-[0_0_18px_rgba(96,165,250,0.9)]" />
-            PERSONAL CLOUD
-          </div>
-
           <h1 className="text-5xl font-black tracking-tight md:text-7xl">
             Envoie tes{" "}
             <span className="bg-gradient-to-r from-blue-400 via-indigo-400 to-violet-500 bg-clip-text text-transparent">
@@ -249,7 +274,14 @@ export default function Home() {
                         key={`${file.name}-${file.size}`}
                         className="flex items-center justify-between rounded-2xl border border-white/5 bg-black/25 px-4 py-3"
                       >
-                        <span className="truncate pr-4 text-sm">{file.name}</span>
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-black/30 text-xl">
+                            {getFileIcon(file)}
+                          </span>
+
+                          <span className="truncate pr-4 text-sm">{file.name}</span>
+                        </div>
+
                         <span className="shrink-0 text-sm text-blue-200">
                           {formatSize(file.size)}
                         </span>
@@ -343,9 +375,10 @@ export default function Home() {
         </div>
 
         <footer className="mt-10 text-center text-sm text-white/35">
-          <Image src="/logo.svg" alt="" width={28} height={28} className="mx-auto mb-3 opacity-80" />
-          <span className="h-2 w-2 rounded-full bg-blue-400 shadow-[0_0_18px_rgba(96,165,250,0.9)]" />
-PERSONAL CLOUD
+          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-sm text-white/70 shadow-2xl backdrop-blur">
+            <span className="h-2 w-2 rounded-full bg-blue-400 shadow-[0_0_18px_rgba(96,165,250,0.9)]" />
+            PERSONAL CLOUD
+          </div>
         </footer>
       </section>
     </main>

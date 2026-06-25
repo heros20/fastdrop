@@ -344,7 +344,8 @@ export default function Home() {
 
         <footer className="mt-10 text-center text-sm text-white/35">
           <Image src="/logo.svg" alt="" width={28} height={28} className="mx-auto mb-3 opacity-80" />
-          PERSONAL CLOUD.
+          <span className="h-2 w-2 rounded-full bg-blue-400 shadow-[0_0_18px_rgba(96,165,250,0.9)]" />
+PERSONAL CLOUD
         </footer>
       </section>
     </main>

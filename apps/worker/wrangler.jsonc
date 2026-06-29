@@ -3,6 +3,10 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-06-25",
 
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+
   "r2_buckets": [
     {
       "binding": "FILES_BUCKET",

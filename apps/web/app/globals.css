@@ -56,6 +56,25 @@ body {
   }
 }
 
+@keyframes wander {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(-4deg);
+  }
+
+  25% {
+    transform: translate(18px, -10px) rotate(6deg);
+  }
+
+  50% {
+    transform: translate(8px, 18px) rotate(-2deg);
+  }
+
+  75% {
+    transform: translate(-14px, 5px) rotate(5deg);
+  }
+}
+
 .fastdrop-bg {
   background:
     radial-gradient(circle at 15% 10%, rgba(37, 99, 235, 0.32), transparent 32%),
@@ -88,6 +107,12 @@ body {
     linear-gradient(120deg, #2563eb, #8b5cf6, #06b6d4, #2563eb) border-box;
   background-size: 200% 200%;
   animation: border-flow 6s linear infinite;
+}
+
+.logo-wander {
+  animation:
+    wander 7s ease-in-out infinite,
+    glow 4s ease-in-out infinite;
 }
 @keyframes glow {
 

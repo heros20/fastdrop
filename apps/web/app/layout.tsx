@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -44,8 +44,6 @@ export const metadata: Metadata = {
 
   manifest: "/site.webmanifest",
 
-  themeColor: "#0b1220",
-
   openGraph: {
     title: "FastDrop",
     description: "Service privé de partage de fichiers.",
@@ -58,6 +56,10 @@ export const metadata: Metadata = {
     title: "FastDrop",
     description: "Service privé de partage de fichiers.",
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0b1220",
 };
 
 export default function RootLayout({

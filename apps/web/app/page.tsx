@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 
 const API = process.env.NEXT_PUBLIC_API_URL!;
@@ -104,6 +105,7 @@ function getFileIcon(file: File) {
 
 export default function Home() {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const router = useRouter();
 
   const [files, setFiles] = useState<File[]>([]);
   const [transferName, setTransferName] = useState("");
@@ -205,7 +207,6 @@ export default function Home() {
         ...acceptedFiles,
       ];
     });
-    setLink("");
     setProgress(0);
   }
 
@@ -213,7 +214,6 @@ export default function Home() {
     setFiles((currentFiles) =>
       currentFiles.filter((_, index) => index !== indexToRemove),
     );
-    setLink("");
     setProgress(0);
   }
 
@@ -376,7 +376,6 @@ export default function Home() {
 
     setLoading(true);
     setProgress(0);
-    setLink("");
 
     try {
       const title =
@@ -417,8 +416,6 @@ export default function Home() {
         completedBytes += files[i].size;
       }
 
-      setProgress(100);
-      setLink(data.downloadUrl);
       saveTransferHistory({
         id: data.slug,
         title,
@@ -427,6 +424,19 @@ export default function Home() {
         downloadUrl: data.downloadUrl,
         manageUrl: data.manageUrl ?? data.downloadUrl,
       });
+
+      setProgress(100);
+
+      const successParams = new URLSearchParams({
+        link: data.downloadUrl,
+        manage: data.manageUrl ?? data.downloadUrl,
+        title,
+        expiresAt: expirationDate.toISOString(),
+        files: String(files.length),
+        size: String(totalSize),
+      });
+
+      router.push(`/upload-complete?${successParams.toString()}`);
     } catch (error) {
       console.error(error);
       alert(error instanceof Error ? error.message : "Erreur pendant l'upload.");
@@ -623,7 +633,6 @@ export default function Home() {
                         type="button"
                         onClick={() => {
                           setFiles([]);
-                          setLink("");
                           setProgress(0);
                         }}
                         disabled={loading}
@@ -793,7 +802,7 @@ export default function Home() {
               </div>
             )}
 
-            {link && (
+            {false && (
               <div className="mt-6 rounded-3xl border border-emerald-400/20 bg-emerald-400/10 p-5">
                 <h3 className="mb-3 font-semibold text-emerald-200">Upload terminé</h3>
 

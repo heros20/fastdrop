@@ -445,18 +445,22 @@ export default function Home() {
     alert("Lien copié.");
   }
 
-  async function copyLinkAndOpen(url: string) {
-    await navigator.clipboard.writeText(link);
-    window.open(url, "_blank", "noopener,noreferrer");
+  async function shareWithDevice() {
+    if (navigator.share) {
+      await navigator.share({
+        title: "FastDrop",
+        text: "Voici mon lien FastDrop",
+        url: link,
+      });
+      return;
+    }
+
+    await copyLink();
   }
 
   const totalSize = files.reduce((sum, file) => sum + file.size, 0);
   const expirationDate = getExpirationDate(expiresInDays);
   const isOverLimit = files.length > MAX_FILE_COUNT || totalSize > MAX_TOTAL_SIZE;
-  const encodedLink = encodeURIComponent(link);
-  const shareText = encodeURIComponent(`Voici mon lien FastDrop : ${link}`);
-  const facebookShareUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodedLink}`;
-  const whatsAppShareUrl = `https://wa.me/?text=${shareText}`;
 
   return (
     <main className="fastdrop-bg relative min-h-screen overflow-hidden text-white">
@@ -829,41 +833,16 @@ export default function Home() {
                   </button>
                 </div>
 
-                <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                  <a
-                    href={facebookShareUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center text-sm font-semibold text-white/75 transition hover:border-blue-300/40 hover:bg-white/10 hover:text-white"
-                  >
-                    Facebook
-                  </a>
-
-                  <button
-                    type="button"
-                    onClick={() => copyLinkAndOpen("https://www.messenger.com/")}
-                    className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/75 transition hover:border-blue-300/40 hover:bg-white/10 hover:text-white"
-                  >
-                    Messenger
-                  </button>
-
-                  <a
-                    href={whatsAppShareUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center text-sm font-semibold text-white/75 transition hover:border-emerald-300/40 hover:bg-white/10 hover:text-white"
-                  >
-                    WhatsApp
-                  </a>
-
-                  <button
-                    type="button"
-                    onClick={() => copyLinkAndOpen("https://discord.com/channels/@me")}
-                    className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/75 transition hover:border-violet-300/40 hover:bg-white/10 hover:text-white"
-                  >
-                    Discord
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={shareWithDevice}
+                  className="mt-4 flex w-full flex-col items-center rounded-2xl bg-white px-6 py-3 font-bold text-black transition hover:bg-blue-100 xl:hidden"
+                >
+                  <span>Partager</span>
+                  <span className="mt-0.5 text-xs font-semibold text-black/55">
+                    Partager avec une app
+                  </span>
+                </button>
 
                 <button
                   type="button"

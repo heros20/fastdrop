@@ -17,6 +17,7 @@ type TransferFile = {
 type Transfer = {
   slug: string;
   title: string | null;
+  senderName: string | null;
   message: string | null;
   protected: boolean;
   expiresAt: string;
@@ -305,6 +306,12 @@ export default function DownloadPage() {
         <h1 className="mx-auto max-w-3xl text-4xl font-black tracking-tight md:text-6xl">
           {transfer.title || "Fichiers disponibles"}
         </h1>
+
+        {transfer.senderName && (
+          <p className="mt-3 text-sm font-semibold uppercase tracking-[0.24em] text-blue-200/70">
+            Envoyé par {transfer.senderName}
+          </p>
+        )}
 
         <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-slate-300">
           Ces fichiers sont disponibles jusqu&apos;au {formatDate(transfer.expiresAt)}.

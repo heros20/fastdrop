@@ -513,7 +513,7 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="relative z-10 mx-auto flex max-w-6xl flex-col items-center px-6 pb-14 pt-6">
+      <section className="relative z-10 mx-auto flex w-full max-w-6xl min-w-0 flex-col items-center px-3 pb-14 pt-6 sm:px-6">
         <div className="mb-8 text-center">
           <h1 className="text-5xl font-black tracking-tight md:text-7xl">
             Envoie tes{" "}
@@ -543,8 +543,8 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="gradient-border w-full rounded-[2rem] p-[1px] shadow-[0_0_80px_rgba(37,99,235,0.16)]">
-          <div className="rounded-[2rem] bg-[#070b18]/90 p-5 backdrop-blur-xl md:p-7">
+        <div className="gradient-border w-full max-w-full min-w-0 rounded-[2rem] p-[1px] shadow-[0_0_80px_rgba(37,99,235,0.16)]">
+          <div className="min-w-0 overflow-hidden rounded-[2rem] bg-[#070b18]/90 p-4 backdrop-blur-xl sm:p-5 md:p-7">
             <div
               onClick={() => inputRef.current?.click()}
               onDragEnter={() => setIsDragging(true)}
@@ -624,8 +624,8 @@ export default function Home() {
             </div>
 
             {files.length > 0 && (
-              <div className="mt-5 grid gap-4">
-                <div className="order-2 rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+              <div className="mt-5 grid min-w-0 gap-4">
+                <div className="order-2 min-w-0 overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
                   <div className="mb-4 flex items-center justify-between">
                     <h3 className="font-semibold">Fichiers sélectionnés</h3>
                     <div className="flex items-center gap-2">
@@ -688,8 +688,8 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="order-1 grid items-stretch gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  <label className="block rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+                <div className="order-1 grid min-w-0 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <label className="block min-w-0 overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
                     <span className="mb-3 block text-sm font-semibold text-white/80">
                       Nom du transfert
                     </span>
@@ -699,14 +699,14 @@ export default function Home() {
                       type="text"
                       maxLength={80}
                       placeholder="Ex : Photos chantier Sandouville"
-                      className="w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-blue-400 focus:shadow-[0_0_30px_rgba(59,130,246,0.25)]"
+                      className="block w-full min-w-0 max-w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-blue-400 focus:shadow-[0_0_30px_rgba(59,130,246,0.25)]"
                     />
                     <p className="mt-3 text-xs text-white/40">
                       Optionnel. Affiché sur la page de téléchargement.
                     </p>
                   </label>
 
-                  <label className="block rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+                  <label className="block min-w-0 overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
                     <span className="mb-3 block text-sm font-semibold text-white/80">
                       Nom de l&apos;expéditeur
                     </span>
@@ -716,14 +716,14 @@ export default function Home() {
                       type="text"
                       maxLength={80}
                       placeholder="Ex : Kevin Bigoni"
-                      className="w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-blue-400 focus:shadow-[0_0_30px_rgba(59,130,246,0.25)]"
+                      className="block w-full min-w-0 max-w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-blue-400 focus:shadow-[0_0_30px_rgba(59,130,246,0.25)]"
                     />
                     <p className="mt-3 text-xs text-white/40">
                       Optionnel. Affiché aux destinataires.
                     </p>
                   </label>
 
-                  <label className="block rounded-3xl border border-white/10 bg-white/[0.04] p-5 md:col-span-2 xl:col-span-2 xl:row-span-2">
+                  <label className="block min-w-0 overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04] p-4 sm:p-5 md:col-span-2 xl:col-span-2 xl:row-span-2">
                     <span className="mb-3 block text-sm font-semibold text-white/80">
                       Message optionnel
                     </span>
@@ -733,21 +733,21 @@ export default function Home() {
                       maxLength={1000}
                       rows={5}
                       placeholder={"Bonjour,\nvous trouverez ci-joint les photos et documents demandés.\nCordialement."}
-                      className="w-full resize-none rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-blue-400 focus:shadow-[0_0_30px_rgba(59,130,246,0.25)]"
+                      className="block w-full min-w-0 max-w-full resize-none rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-blue-400 focus:shadow-[0_0_30px_rgba(59,130,246,0.25)]"
                     />
                     <p className="mt-3 text-xs text-white/40">
                       {transferMessage.length}/1000 caractères
                     </p>
                   </label>
 
-                  <label className="block rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+                  <label className="block min-w-0 overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
                     <span className="mb-3 block text-sm font-semibold text-white/80">
                       Expiration du lien
                     </span>
                     <select
                       value={expiresInDays}
                       onChange={(event) => setExpiresInDays(Number(event.target.value))}
-                      className="w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition focus:border-blue-400 focus:shadow-[0_0_30px_rgba(59,130,246,0.25)]"
+                      className="block w-full min-w-0 max-w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition focus:border-blue-400 focus:shadow-[0_0_30px_rgba(59,130,246,0.25)]"
                     >
                       <option value={1}>24 heures</option>
                       <option value={7}>7 jours</option>
@@ -761,7 +761,7 @@ export default function Home() {
                     </p>
                   </label>
 
-                  <label className="block rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+                  <label className="block min-w-0 overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
                     <span className="mb-3 block text-sm font-semibold text-white/80">
                       Mot de passe optionnel
                     </span>
@@ -770,14 +770,14 @@ export default function Home() {
                       onChange={(event) => setPassword(event.target.value)}
                       type="password"
                       placeholder="Laisser vide si inutile"
-                      className="w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-violet-400 focus:shadow-[0_0_30px_rgba(139,92,246,0.25)]"
+                      className="block w-full min-w-0 max-w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-violet-400 focus:shadow-[0_0_30px_rgba(139,92,246,0.25)]"
                     />
                   </label>
 
                   <button
                     onClick={createTransfer}
                     disabled={loading || isOverLimit}
-                    className="w-full rounded-2xl bg-gradient-to-r from-blue-500 via-indigo-500 to-violet-600 px-6 py-4 text-base font-bold text-white shadow-[0_18px_55px_rgba(79,70,229,0.35)] transition hover:-translate-y-1 hover:shadow-[0_24px_70px_rgba(79,70,229,0.5)] disabled:cursor-not-allowed disabled:opacity-50"
+                    className="w-full min-w-0 max-w-full rounded-2xl bg-gradient-to-r from-blue-500 via-indigo-500 to-violet-600 px-6 py-4 text-base font-bold text-white shadow-[0_18px_55px_rgba(79,70,229,0.35)] transition hover:-translate-y-1 hover:shadow-[0_24px_70px_rgba(79,70,229,0.5)] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {loading ? "Upload en cours..." : "Créer le lien de partage"}
                   </button>

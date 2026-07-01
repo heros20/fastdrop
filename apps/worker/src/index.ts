@@ -28,9 +28,16 @@ type ZipCentralEntry = {
   modifiedDate: number;
 };
 
+type StoredPart = {
+  part_number: number;
+  etag: string;
+  size: number;
+};
+
 const MAX_FILE_COUNT = 20;
 const MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024;
-const MAX_FILE_SIZE = 500 * 1024 * 1024;
+const MAX_FILE_SIZE = MAX_TOTAL_SIZE;
+const MULTIPART_CHUNK_SIZE = 50 * 1024 * 1024;
 const MAX_EXPIRATION_DAYS = 30;
 const MAX_TRANSFER_TITLE_LENGTH = 80;
 const MAX_TRANSFER_MESSAGE_LENGTH = 1000;
@@ -395,14 +402,37 @@ async function cleanupExpiredTransfers(
 
 async function deleteTransferById(env: Env, transferId: string) {
   const files = await env.DB.prepare(
-    `SELECT r2_key
+    `SELECT r2_key, multipart_upload_id, upload_status
      FROM files
      WHERE transfer_id = ?`
   )
     .bind(transferId)
-    .all<{ r2_key: string }>();
+    .all<{
+      r2_key: string;
+      multipart_upload_id: string | null;
+      upload_status: string;
+    }>();
 
   const r2Keys = files.results.map((file) => file.r2_key);
+
+  for (const file of files.results) {
+    if (file.multipart_upload_id && file.upload_status !== "uploaded") {
+      try {
+        await env.FILES_BUCKET.resumeMultipartUpload(
+          file.r2_key,
+          file.multipart_upload_id
+        ).abort();
+      } catch (error) {
+        console.log(
+          JSON.stringify({
+            event: "multipart-abort-failed-during-delete",
+            r2Key: file.r2_key,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        );
+      }
+    }
+  }
 
   for (const keys of chunk(r2Keys, 1000)) {
     if (keys.length > 0) {
@@ -411,6 +441,10 @@ async function deleteTransferById(env: Env, transferId: string) {
   }
 
   await env.DB.batch([
+    env.DB.prepare(
+      `DELETE FROM upload_parts
+       WHERE file_id IN (SELECT id FROM files WHERE transfer_id = ?)`
+    ).bind(transferId),
     env.DB.prepare("DELETE FROM files WHERE transfer_id = ?").bind(transferId),
     env.DB.prepare("DELETE FROM transfers WHERE id = ?").bind(transferId),
   ]);
@@ -418,6 +452,36 @@ async function deleteTransferById(env: Env, transferId: string) {
   return {
     deletedFiles: r2Keys.length,
   };
+}
+
+function serializeParts(parts: StoredPart[]) {
+  return parts.map((part) => ({
+    partNumber: part.part_number,
+    etag: part.etag,
+    size: part.size,
+  }));
+}
+
+function expectedPartSize(fileSize: number, partNumber: number) {
+  const start = (partNumber - 1) * MULTIPART_CHUNK_SIZE;
+  const remaining = fileSize - start;
+
+  if (remaining <= 0) return null;
+
+  return Math.min(MULTIPART_CHUNK_SIZE, remaining);
+}
+
+async function getStoredParts(env: Env, fileId: string) {
+  const parts = await env.DB.prepare(
+    `SELECT part_number, etag, size
+     FROM upload_parts
+     WHERE file_id = ?
+     ORDER BY part_number ASC`
+  )
+    .bind(fileId)
+    .all<StoredPart>();
+
+  return parts.results;
 }
 
 export default {
@@ -573,7 +637,10 @@ export default {
           id: fileId,
           name: file.name,
           r2Key,
-          uploadUrl: `${url.origin}/upload/${fileId}`,
+          startUrl: `${url.origin}/uploads/${fileId}/start`,
+          uploadPartUrl: `${url.origin}/uploads/${fileId}/parts`,
+          completeUrl: `${url.origin}/uploads/${fileId}/complete`,
+          abortUrl: `${url.origin}/uploads/${fileId}/abort`,
         });
       }
 
@@ -585,7 +652,283 @@ export default {
       });
     }
 
+    const startMatch = url.pathname.match(/^\/uploads\/([^/]+)\/start$/);
+
+    if (request.method === "POST" && startMatch) {
+      const fileId = startMatch[1];
+      const file = await env.DB.prepare(
+        `SELECT r2_key, mime_type, size, upload_status, multipart_upload_id
+         FROM files
+         WHERE id = ?`
+      )
+        .bind(fileId)
+        .first<{
+          r2_key: string;
+          mime_type: string | null;
+          size: number;
+          upload_status: string;
+          multipart_upload_id: string | null;
+        }>();
+
+      if (!file) {
+        return json(request, env, { error: "Fichier indisponible." }, 404);
+      }
+
+      if (file.upload_status === "uploaded") {
+        return json(request, env, {
+          ok: true,
+          status: "uploaded",
+          partSize: MULTIPART_CHUNK_SIZE,
+          uploadedParts: serializeParts(await getStoredParts(env, fileId)),
+        });
+      }
+
+      let uploadId = file.multipart_upload_id;
+
+      if (!uploadId || file.upload_status === "aborted") {
+        const upload = await env.FILES_BUCKET.createMultipartUpload(file.r2_key, {
+          httpMetadata: {
+            contentType: file.mime_type ?? "application/octet-stream",
+          },
+        });
+
+        uploadId = upload.uploadId;
+
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM upload_parts WHERE file_id = ?").bind(fileId),
+          env.DB.prepare(
+            `UPDATE files
+             SET upload_status = 'uploading',
+                 multipart_upload_id = ?,
+                 upload_started_at = ?,
+                 uploaded_at = NULL
+             WHERE id = ?`
+          ).bind(uploadId, new Date().toISOString(), fileId),
+        ]);
+      }
+
+      return json(request, env, {
+        ok: true,
+        status: "uploading",
+        uploadId,
+        partSize: MULTIPART_CHUNK_SIZE,
+        uploadedParts: serializeParts(await getStoredParts(env, fileId)),
+      });
+    }
+
+    const partMatch = url.pathname.match(/^\/uploads\/([^/]+)\/parts\/(\d+)$/);
+
+    if (request.method === "PUT" && partMatch) {
+      const fileId = partMatch[1];
+      const partNumber = Number(partMatch[2]);
+      const uploadId = url.searchParams.get("uploadId");
+
+      if (!uploadId || !Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) {
+        return json(request, env, { error: "Morceau invalide." }, 400);
+      }
+
+      const file = await env.DB.prepare(
+        `SELECT r2_key, size, upload_status, multipart_upload_id
+         FROM files
+         WHERE id = ?`
+      )
+        .bind(fileId)
+        .first<{
+          r2_key: string;
+          size: number;
+          upload_status: string;
+          multipart_upload_id: string | null;
+        }>();
+
+      if (!file) {
+        return json(request, env, { error: "Fichier indisponible." }, 404);
+      }
+
+      if (file.upload_status === "uploaded") {
+        return json(request, env, { error: "Fichier deja uploade." }, 409);
+      }
+
+      if (file.multipart_upload_id !== uploadId) {
+        return json(request, env, { error: "Session d'upload invalide." }, 409);
+      }
+
+      const expectedSize = expectedPartSize(file.size, partNumber);
+
+      if (!expectedSize) {
+        return json(request, env, { error: "Numero de morceau hors limite." }, 400);
+      }
+
+      const contentLengthHeader = request.headers.get("Content-Length");
+
+      if (!contentLengthHeader) {
+        return json(request, env, { error: "Content-Length obligatoire." }, 411);
+      }
+
+      const contentLength = Number(contentLengthHeader);
+
+      if (!Number.isFinite(contentLength) || contentLength !== expectedSize) {
+        return json(request, env, { error: "Taille du morceau invalide." }, 413);
+      }
+
+      if (!request.body) {
+        return json(request, env, { error: "Corps de morceau manquant." }, 400);
+      }
+
+      const upload = env.FILES_BUCKET.resumeMultipartUpload(file.r2_key, uploadId);
+      const uploadedPart = await upload.uploadPart(partNumber, request.body);
+
+      await env.DB.prepare(
+        `INSERT INTO upload_parts (file_id, part_number, etag, size, uploaded_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(file_id, part_number)
+         DO UPDATE SET
+           etag = excluded.etag,
+           size = excluded.size,
+           uploaded_at = excluded.uploaded_at`
+      )
+        .bind(
+          fileId,
+          uploadedPart.partNumber,
+          uploadedPart.etag,
+          contentLength,
+          new Date().toISOString()
+        )
+        .run();
+
+      return json(request, env, {
+        ok: true,
+        part: {
+          partNumber: uploadedPart.partNumber,
+          etag: uploadedPart.etag,
+          size: contentLength,
+        },
+      });
+    }
+
+    const completeMatch = url.pathname.match(/^\/uploads\/([^/]+)\/complete$/);
+
+    if (request.method === "POST" && completeMatch) {
+      const fileId = completeMatch[1];
+      const body = await request.json<{ uploadId?: string }>();
+
+      if (!body.uploadId) {
+        return json(request, env, { error: "Session d'upload manquante." }, 400);
+      }
+
+      const file = await env.DB.prepare(
+        `SELECT r2_key, size, upload_status, multipart_upload_id
+         FROM files
+         WHERE id = ?`
+      )
+        .bind(fileId)
+        .first<{
+          r2_key: string;
+          size: number;
+          upload_status: string;
+          multipart_upload_id: string | null;
+        }>();
+
+      if (!file) {
+        return json(request, env, { error: "Fichier indisponible." }, 404);
+      }
+
+      if (file.upload_status === "uploaded") {
+        return json(request, env, { ok: true });
+      }
+
+      if (file.multipart_upload_id !== body.uploadId) {
+        return json(request, env, { error: "Session d'upload invalide." }, 409);
+      }
+
+      const parts = await getStoredParts(env, fileId);
+      const expectedPartCount = Math.ceil(file.size / MULTIPART_CHUNK_SIZE);
+      const uploadedSize = parts.reduce((sum, part) => sum + part.size, 0);
+
+      if (parts.length !== expectedPartCount || uploadedSize !== file.size) {
+        return json(request, env, { error: "Upload incomplet." }, 409);
+      }
+
+      for (let index = 0; index < parts.length; index++) {
+        const expectedNumber = index + 1;
+        const partSize = expectedPartSize(file.size, expectedNumber);
+
+        if (parts[index].part_number !== expectedNumber || parts[index].size !== partSize) {
+          return json(request, env, { error: "Morceaux incoherents." }, 409);
+        }
+      }
+
+      const upload = env.FILES_BUCKET.resumeMultipartUpload(file.r2_key, body.uploadId);
+
+      await upload.complete(
+        parts.map((part) => ({
+          partNumber: part.part_number,
+          etag: part.etag,
+        }))
+      );
+
+      await env.DB.prepare(
+        `UPDATE files
+         SET upload_status = 'uploaded', uploaded_at = ?
+         WHERE id = ?`
+      )
+        .bind(new Date().toISOString(), fileId)
+        .run();
+
+      return json(request, env, { ok: true });
+    }
+
+    const abortMatch = url.pathname.match(/^\/uploads\/([^/]+)\/abort$/);
+
+    if (request.method === "POST" && abortMatch) {
+      const fileId = abortMatch[1];
+      const body = (await request.json().catch(() => null)) as {
+        uploadId?: string;
+      } | null;
+
+      const file = await env.DB.prepare(
+        `SELECT r2_key, upload_status, multipart_upload_id
+         FROM files
+         WHERE id = ?`
+      )
+        .bind(fileId)
+        .first<{
+          r2_key: string;
+          upload_status: string;
+          multipart_upload_id: string | null;
+        }>();
+
+      if (!file) {
+        return json(request, env, { error: "Fichier indisponible." }, 404);
+      }
+
+      const uploadId = body?.uploadId ?? file.multipart_upload_id;
+
+      if (uploadId && file.upload_status !== "uploaded") {
+        await env.FILES_BUCKET.resumeMultipartUpload(file.r2_key, uploadId).abort();
+      }
+
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM upload_parts WHERE file_id = ?").bind(fileId),
+        env.DB.prepare(
+          `UPDATE files
+           SET upload_status = 'aborted',
+               multipart_upload_id = NULL,
+               upload_started_at = NULL
+           WHERE id = ? AND upload_status != 'uploaded'`
+        ).bind(fileId),
+      ]);
+
+      return json(request, env, { ok: true });
+    }
+
     if (request.method === "PUT" && url.pathname.startsWith("/upload/")) {
+      return json(request, env, { error: "Utilise les routes multipart." }, 410);
+    }
+
+    if (
+      request.method === "PUT" &&
+      url.pathname.startsWith("/__legacy-upload-disabled/")
+    ) {
       const fileId = url.pathname.replace("/upload/", "");
 
       const file = await env.DB.prepare(

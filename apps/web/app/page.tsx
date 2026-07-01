@@ -14,7 +14,11 @@ const MAX_HISTORY_ITEMS = 10;
 type UploadResponseFile = {
   id: string;
   name: string;
-  uploadUrl: string;
+  uploadUrl?: string;
+  startUrl: string;
+  uploadPartUrl: string;
+  completeUrl: string;
+  abortUrl: string;
 };
 
 type UploadResponse = {
@@ -22,6 +26,19 @@ type UploadResponse = {
   downloadUrl: string;
   manageUrl?: string;
   files: UploadResponseFile[];
+};
+
+type UploadedPart = {
+  partNumber: number;
+  etag: string;
+  size: number;
+};
+
+type StartUploadResponse = {
+  status: "uploading" | "uploaded";
+  uploadId?: string;
+  partSize: number;
+  uploadedParts: UploadedPart[];
 };
 
 type TransferHistoryItem = {
@@ -199,6 +216,7 @@ export default function Home() {
     setProgress(0);
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async function uploadFile(file: File, uploadUrl: string, index: number) {
     return new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -221,6 +239,121 @@ export default function Home() {
       xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
       xhr.send(file);
     });
+  }
+
+  async function uploadMultipartPart(
+    part: Blob,
+    uploadUrl: string,
+    onProgress: (loaded: number) => void,
+  ) {
+    return new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) return;
+        onProgress(event.loaded);
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(`Upload echoue : ${xhr.status}`));
+      };
+
+      xhr.onerror = () => reject(new Error("Erreur reseau pendant l'upload."));
+
+      xhr.open("PUT", uploadUrl);
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.send(part);
+    });
+  }
+
+  async function uploadFileMultipart(
+    file: File,
+    uploadFileData: UploadResponseFile,
+    completedBeforeFile: number,
+    transferSize: number,
+  ) {
+    if (!uploadFileData.startUrl && uploadFileData.uploadUrl) {
+      await uploadMultipartPart(file, uploadFileData.uploadUrl, (loaded) => {
+        setProgress(
+          Math.round(((completedBeforeFile + loaded) / transferSize) * 100),
+        );
+      });
+      return;
+    }
+
+    const startResponse = await fetch(uploadFileData.startUrl, {
+      method: "POST",
+    });
+
+    if (!startResponse.ok) {
+      throw new Error("Impossible de demarrer l'upload multipart.");
+    }
+
+    const uploadState = (await startResponse.json()) as StartUploadResponse;
+
+    if (uploadState.status === "uploaded") {
+      setProgress(Math.round(((completedBeforeFile + file.size) / transferSize) * 100));
+      return;
+    }
+
+    if (!uploadState.uploadId) {
+      throw new Error("Session d'upload multipart manquante.");
+    }
+
+    const uploadedParts = new Set(
+      uploadState.uploadedParts.map((part) => part.partNumber),
+    );
+    let completedFileBytes = uploadState.uploadedParts.reduce(
+      (sum, part) => sum + part.size,
+      0,
+    );
+
+    setProgress(Math.round(((completedBeforeFile + completedFileBytes) / transferSize) * 100));
+
+    const partSize = uploadState.partSize;
+    const partCount = Math.ceil(file.size / partSize);
+
+    for (let partNumber = 1; partNumber <= partCount; partNumber++) {
+      if (uploadedParts.has(partNumber)) continue;
+
+      const start = (partNumber - 1) * partSize;
+      const end = Math.min(start + partSize, file.size);
+      const part = file.slice(start, end);
+      let currentPartLoaded = 0;
+
+      await uploadMultipartPart(
+        part,
+        `${uploadFileData.uploadPartUrl}/${partNumber}?uploadId=${encodeURIComponent(
+          uploadState.uploadId,
+        )}`,
+        (loaded) => {
+          currentPartLoaded = loaded;
+          const uploadedBytes =
+            completedBeforeFile + completedFileBytes + currentPartLoaded;
+          setProgress(Math.min(99, Math.round((uploadedBytes / transferSize) * 100)));
+        },
+      );
+
+      completedFileBytes += part.size;
+      setProgress(Math.round(((completedBeforeFile + completedFileBytes) / transferSize) * 100));
+    }
+
+    const completeResponse = await fetch(uploadFileData.completeUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        uploadId: uploadState.uploadId,
+      }),
+    });
+
+    if (!completeResponse.ok) {
+      const errorData = (await completeResponse.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+
+      throw new Error(errorData?.error ?? "Impossible de finaliser l'upload.");
+    }
   }
 
   async function createTransfer() {
@@ -267,9 +400,11 @@ export default function Home() {
 
       const data = (await response.json()) as UploadResponse;
       const uploadFiles = data.files;
+      let completedBytes = 0;
 
       for (let i = 0; i < uploadFiles.length; i++) {
-        await uploadFile(files[i], uploadFiles[i].uploadUrl, i);
+        await uploadFileMultipart(files[i], uploadFiles[i], completedBytes, totalSize);
+        completedBytes += files[i].size;
       }
 
       setProgress(100);
@@ -388,7 +523,8 @@ export default function Home() {
                 addFiles(event.dataTransfer.files);
               }}
               className={[
-                "group flex min-h-72 cursor-pointer flex-col items-center justify-center rounded-[1.5rem] border border-dashed p-8 text-center transition duration-300",
+                "group flex cursor-pointer flex-col items-center justify-center rounded-[1.5rem] border border-dashed text-center transition duration-300",
+                files.length > 0 ? "min-h-40 p-5" : "min-h-72 p-8",
                 isDragging
                   ? "scale-[1.015] border-violet-400 bg-violet-500/10"
                   : "border-white/15 bg-black/25 hover:scale-[1.01] hover:border-blue-400/70 hover:bg-white/[0.05]",
@@ -408,15 +544,25 @@ export default function Home() {
               <Image
                 src="/fd-logo.png"
                 alt=""
-                width={76}
-                height={76}
-                className="logo-float mb-5 drop-shadow-[0_0_35px_rgba(139,92,246,0.55)]"
+                width={files.length > 0 ? 52 : 76}
+                height={files.length > 0 ? 52 : 76}
+                className={[
+                  "logo-float drop-shadow-[0_0_35px_rgba(139,92,246,0.55)]",
+                  files.length > 0 ? "mb-3" : "mb-5",
+                ].join(" ")}
               />
 
-              <h2 className="text-3xl font-bold">Glisse tes fichiers ici</h2>
+              <h2 className={files.length > 0 ? "text-xl font-bold" : "text-3xl font-bold"}>
+                Glisse tes fichiers ici
+              </h2>
               <p className="mt-2 text-white/50">ou clique pour sélectionner</p>
 
-              <div className="mt-6 grid w-full max-w-2xl gap-2 text-left text-xs text-white/55 sm:grid-cols-3">
+              <div
+                className={[
+                  "grid w-full max-w-2xl gap-2 text-left text-xs text-white/55 sm:grid-cols-3",
+                  files.length > 0 ? "mt-4 hidden md:grid" : "mt-6",
+                ].join(" ")}
+              >
                 <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
                   <p className="font-semibold text-white/75">Taille max</p>
                   <p className="mt-1">{formatSize(MAX_TOTAL_SIZE)} par transfert</p>
@@ -435,15 +581,18 @@ export default function Home() {
 
               <button
                 type="button"
-                className="mt-7 rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 px-6 py-3 font-semibold shadow-[0_15px_45px_rgba(79,70,229,0.35)] transition group-hover:-translate-y-1"
+                className={[
+                  "rounded-2xl bg-gradient-to-r from-blue-500 to-violet-600 font-semibold shadow-[0_15px_45px_rgba(79,70,229,0.35)] transition group-hover:-translate-y-1",
+                  files.length > 0 ? "mt-4 px-5 py-2.5 text-sm" : "mt-7 px-6 py-3",
+                ].join(" ")}
               >
                 Choisir des fichiers
               </button>
             </div>
 
             {files.length > 0 && (
-              <div className="mt-6 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
-                <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+              <div className="mt-5 grid gap-4">
+                <div className="order-2 rounded-3xl border border-white/10 bg-white/[0.04] p-5">
                   <div className="mb-4 flex items-center justify-between">
                     <h3 className="font-semibold">Fichiers sélectionnés</h3>
                     <div className="flex items-center gap-2">
@@ -507,7 +656,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="space-y-5">
+                <div className="order-1 grid items-stretch gap-4 md:grid-cols-2 xl:grid-cols-4">
                   <label className="block rounded-3xl border border-white/10 bg-white/[0.04] p-5">
                     <span className="mb-3 block text-sm font-semibold text-white/80">
                       Nom du transfert
@@ -525,7 +674,7 @@ export default function Home() {
                     </p>
                   </label>
 
-                  <label className="block rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+                  <label className="block rounded-3xl border border-white/10 bg-white/[0.04] p-5 md:col-span-2 xl:col-span-2 xl:row-span-2">
                     <span className="mb-3 block text-sm font-semibold text-white/80">
                       Message optionnel
                     </span>
@@ -575,10 +724,18 @@ export default function Home() {
                       className="w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-violet-400 focus:shadow-[0_0_30px_rgba(139,92,246,0.25)]"
                     />
                   </label>
+
+                  <button
+                    onClick={createTransfer}
+                    disabled={loading || isOverLimit}
+                    className="w-full rounded-2xl bg-gradient-to-r from-blue-500 via-indigo-500 to-violet-600 px-6 py-4 text-base font-bold text-white shadow-[0_18px_55px_rgba(79,70,229,0.35)] transition hover:-translate-y-1 hover:shadow-[0_24px_70px_rgba(79,70,229,0.5)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loading ? "Upload en cours..." : "Créer le lien de partage"}
+                  </button>
                 </div>
 
                 {loading && (
-                  <div className="lg:col-span-2">
+                  <div className="order-3">
                     <div className="mb-2 flex justify-between text-sm text-white/60">
                       <span>Upload en cours</span>
                       <span>{progress}%</span>
@@ -593,13 +750,6 @@ export default function Home() {
                   </div>
                 )}
 
-                <button
-                  onClick={createTransfer}
-                  disabled={loading || isOverLimit}
-                  className="lg:col-span-2 w-full rounded-2xl bg-gradient-to-r from-blue-500 via-indigo-500 to-violet-600 px-6 py-4 text-lg font-bold text-white shadow-[0_18px_55px_rgba(79,70,229,0.35)] transition hover:-translate-y-1 hover:shadow-[0_24px_70px_rgba(79,70,229,0.5)] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {loading ? "Upload en cours..." : "Créer le lien de partage"}
-                </button>
               </div>
             )}
 

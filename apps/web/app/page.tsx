@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import {
   collectTransferFilesFromDrop,
   createOptimizedArchive,
@@ -19,6 +19,7 @@ const MAX_TOTAL_SIZE = TRANSFER_SIZE_LIMIT;
 const MAX_SOURCE_FILE_COUNT = 1000;
 const MAX_EXPIRATION_DAYS = 30;
 const TRANSFER_HISTORY_KEY = "fastdrop:transfer-history";
+const TRANSFER_HISTORY_CHANGED_EVENT = "fastdrop:transfer-history-changed";
 const MAX_HISTORY_ITEMS = 10;
 
 type UploadResponseFile = {
@@ -59,6 +60,40 @@ type TransferHistoryItem = {
   downloadUrl: string;
   manageUrl: string;
 };
+
+function readTransferHistory() {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const storedHistory = window.localStorage.getItem(TRANSFER_HISTORY_KEY);
+
+    if (!storedHistory) return [];
+
+    const parsedHistory = JSON.parse(storedHistory) as TransferHistoryItem[];
+
+    return Array.isArray(parsedHistory) ? parsedHistory : [];
+  } catch {
+    return [];
+  }
+}
+
+function subscribeTransferHistory(onStoreChange: () => void) {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === TRANSFER_HISTORY_KEY) onStoreChange();
+  };
+
+  window.addEventListener("storage", onStorage);
+  window.addEventListener(TRANSFER_HISTORY_CHANGED_EVENT, onStoreChange);
+
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    window.removeEventListener(TRANSFER_HISTORY_CHANGED_EVENT, onStoreChange);
+  };
+}
+
+function notifyTransferHistoryChanged() {
+  window.dispatchEvent(new Event(TRANSFER_HISTORY_CHANGED_EVENT));
+}
 
 function formatSize(size: number) {
   if (size < 1024) return `${size} o`;
@@ -127,56 +162,41 @@ export default function Home() {
   const [progress, setProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState("Préparation de l'envoi...");
   const [isDragging, setIsDragging] = useState(false);
-  const [recentTransfers, setRecentTransfers] = useState<TransferHistoryItem[]>(
-    () => {
-      if (typeof window === "undefined") return [];
-
-      try {
-        const storedHistory = window.localStorage.getItem(TRANSFER_HISTORY_KEY);
-
-        if (!storedHistory) return [];
-
-        const parsedHistory = JSON.parse(storedHistory) as TransferHistoryItem[];
-
-        return Array.isArray(parsedHistory) ? parsedHistory : [];
-      } catch {
-        return [];
-      }
-    },
+  const recentTransfers = useSyncExternalStore(
+    subscribeTransferHistory,
+    readTransferHistory,
+    () => [],
   );
 
   function saveTransferHistory(entry: TransferHistoryItem) {
-    setRecentTransfers((currentHistory) => {
-      const nextHistory = [
-        entry,
-        ...currentHistory.filter(
-          (item) => item.downloadUrl !== entry.downloadUrl,
-        ),
-      ].slice(0, MAX_HISTORY_ITEMS);
+    const currentHistory = readTransferHistory();
+    const nextHistory = [
+      entry,
+      ...currentHistory.filter(
+        (item) => item.downloadUrl !== entry.downloadUrl,
+      ),
+    ].slice(0, MAX_HISTORY_ITEMS);
 
-      window.localStorage.setItem(
-        TRANSFER_HISTORY_KEY,
-        JSON.stringify(nextHistory),
-      );
-
-      return nextHistory;
-    });
+    window.localStorage.setItem(
+      TRANSFER_HISTORY_KEY,
+      JSON.stringify(nextHistory),
+    );
+    notifyTransferHistoryChanged();
   }
 
   function removeHistoryItem(id: string) {
-    setRecentTransfers((currentHistory) => {
-      const nextHistory = currentHistory.filter((item) => item.id !== id);
-      window.localStorage.setItem(
-        TRANSFER_HISTORY_KEY,
-        JSON.stringify(nextHistory),
-      );
-      return nextHistory;
-    });
+    const nextHistory = readTransferHistory().filter((item) => item.id !== id);
+
+    window.localStorage.setItem(
+      TRANSFER_HISTORY_KEY,
+      JSON.stringify(nextHistory),
+    );
+    notifyTransferHistoryChanged();
   }
 
   function clearTransferHistory() {
-    setRecentTransfers([]);
     window.localStorage.removeItem(TRANSFER_HISTORY_KEY);
+    notifyTransferHistoryChanged();
   }
 
   function getFileKey(file: TransferFile) {

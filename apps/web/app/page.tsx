@@ -4,10 +4,19 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
+import {
+  collectTransferFilesFromDrop,
+  createOptimizedArchive,
+  shouldOptimizeTransfer,
+  TRANSFER_SIZE_LIMIT,
+  type TransferFile,
+  UPLOAD_FILE_COUNT_LIMIT,
+} from "@/lib/transfer-optimization";
 
 const API = process.env.NEXT_PUBLIC_API_URL!;
-const MAX_FILE_COUNT = 20;
-const MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024;
+const MAX_FILE_COUNT = UPLOAD_FILE_COUNT_LIMIT;
+const MAX_TOTAL_SIZE = TRANSFER_SIZE_LIMIT;
+const MAX_SOURCE_FILE_COUNT = 1000;
 const MAX_EXPIRATION_DAYS = 30;
 const TRANSFER_HISTORY_KEY = "fastdrop:transfer-history";
 const MAX_HISTORY_ITEMS = 10;
@@ -107,7 +116,7 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const router = useRouter();
 
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<TransferFile[]>([]);
   const [transferName, setTransferName] = useState("");
   const [senderName, setSenderName] = useState("");
   const [transferMessage, setTransferMessage] = useState("");
@@ -116,6 +125,7 @@ export default function Home() {
   const [link, setLink] = useState("");
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState("Préparation de l'envoi...");
   const [isDragging, setIsDragging] = useState(false);
   const [recentTransfers, setRecentTransfers] = useState<TransferHistoryItem[]>(
     () => {
@@ -169,21 +179,25 @@ export default function Home() {
     window.localStorage.removeItem(TRANSFER_HISTORY_KEY);
   }
 
-  function addFiles(fileList: FileList | null) {
+  function getFileKey(file: TransferFile) {
+    return `${file.webkitRelativePath || file.name}-${file.size}-${file.lastModified}`;
+  }
+
+  function addFiles(fileList: FileList | TransferFile[] | null) {
     if (!fileList) return;
-    const nextFiles = Array.from(fileList);
+    const nextFiles = Array.from(fileList) as TransferFile[];
     if (!nextFiles.length) return;
 
     setFiles((currentFiles) => {
       const existingKeys = new Set(
-        currentFiles.map((file) => `${file.name}-${file.size}-${file.lastModified}`),
+        currentFiles.map(getFileKey),
       );
       const uniqueNewFiles = nextFiles.filter(
-        (file) => !existingKeys.has(`${file.name}-${file.size}-${file.lastModified}`),
+        (file) => !existingKeys.has(getFileKey(file)),
       );
-      const allowedSlots = Math.max(MAX_FILE_COUNT - currentFiles.length, 0);
+      const allowedSlots = Math.max(MAX_SOURCE_FILE_COUNT - currentFiles.length, 0);
       const filesWithinCount = uniqueNewFiles.slice(0, allowedSlots);
-      const acceptedFiles: File[] = [];
+      const acceptedFiles: TransferFile[] = [];
       let nextTotalSize = currentFiles.reduce((sum, file) => sum + file.size, 0);
 
       for (const file of filesWithinCount) {
@@ -198,7 +212,7 @@ export default function Home() {
 
       if (skippedCount > 0) {
         alert(
-          `Certains fichiers n'ont pas été ajoutés. Limites : ${MAX_FILE_COUNT} fichiers, ${formatSize(MAX_TOTAL_SIZE)} maximum par transfert.`,
+          `Certains fichiers n'ont pas été ajoutés. Limites : ${MAX_SOURCE_FILE_COUNT} fichiers sélectionnés, ${formatSize(MAX_TOTAL_SIZE)} maximum par transfert.`,
         );
       }
 
@@ -208,6 +222,15 @@ export default function Home() {
       ];
     });
     setProgress(0);
+  }
+
+  async function handleDrop(dataTransfer: DataTransfer) {
+    try {
+      addFiles(await collectTransferFilesFromDrop(dataTransfer));
+    } catch (error) {
+      console.error(error);
+      addFiles(dataTransfer.files);
+    }
   }
 
   function removeFile(indexToRemove: number) {
@@ -367,20 +390,64 @@ export default function Home() {
 
   async function createTransfer() {
     if (!files.length) return;
-    if (files.length > MAX_FILE_COUNT || totalSize > MAX_TOTAL_SIZE) {
+    const initialDecision = shouldOptimizeTransfer(files);
+
+    if (
+      totalSize > MAX_TOTAL_SIZE ||
+      (files.length > MAX_FILE_COUNT && !initialDecision.shouldOptimize)
+    ) {
       alert(
-        `Transfert trop volumineux. Limites : ${MAX_FILE_COUNT} fichiers, ${formatSize(MAX_TOTAL_SIZE)} maximum.`,
+        `Transfert trop volumineux. Limites : ${MAX_FILE_COUNT} fichiers en envoi direct, ${formatSize(MAX_TOTAL_SIZE)} maximum.`,
       );
       return;
     }
 
     setLoading(true);
     setProgress(0);
+    setUploadStatus("Analyse des fichiers...");
 
     try {
+      let preparedFiles: File[] = files;
+      let preparedTotalSize = totalSize;
+      let wasOptimized = false;
+
+      if (initialDecision.shouldOptimize) {
+        setUploadStatus("Optimisation du transfert...");
+
+        try {
+          const archive = await createOptimizedArchive(
+            files,
+            initialDecision.archiveName,
+            setProgress,
+          );
+
+          if (archive.size <= MAX_TOTAL_SIZE) {
+            preparedFiles = [archive];
+            preparedTotalSize = archive.size;
+            wasOptimized = true;
+          }
+        } catch (error) {
+          console.error("Transfer optimization failed, falling back to direct upload.", error);
+        }
+      }
+
+      if (preparedFiles.length > MAX_FILE_COUNT || preparedTotalSize > MAX_TOTAL_SIZE) {
+        alert(
+          `Transfert trop volumineux. Limites : ${MAX_FILE_COUNT} fichiers en envoi direct, ${formatSize(MAX_TOTAL_SIZE)} maximum.`,
+        );
+        return;
+      }
+
+      setUploadStatus("Préparation de l'envoi...");
+      setProgress(0);
+
       const title =
         transferName.trim() ||
-        (files.length === 1 ? files[0].name : `${files.length} fichiers`);
+        (files.length === 1 && !wasOptimized
+          ? files[0].name
+          : wasOptimized && files.length === 1
+            ? initialDecision.archiveName.replace(/\.zip$/i, "")
+            : `${files.length} fichiers`);
 
       const response = await fetch(`${API}/transfers`, {
         method: "POST",
@@ -391,7 +458,7 @@ export default function Home() {
           message: transferMessage.trim() || undefined,
           expiresInDays,
           password: password.trim() || undefined,
-          files: files.map((file) => ({
+          files: preparedFiles.map((file) => ({
             name: file.name,
             size: file.size,
             type: file.type,
@@ -408,12 +475,19 @@ export default function Home() {
       }
 
       const data = (await response.json()) as UploadResponse;
-      const uploadFiles = data.files;
+      const uploadTargets = data.files;
       let completedBytes = 0;
 
-      for (let i = 0; i < uploadFiles.length; i++) {
-        await uploadFileMultipart(files[i], uploadFiles[i], completedBytes, totalSize);
-        completedBytes += files[i].size;
+      setUploadStatus("Envoi en cours...");
+
+      for (let i = 0; i < uploadTargets.length; i++) {
+        await uploadFileMultipart(
+          preparedFiles[i],
+          uploadTargets[i],
+          completedBytes,
+          preparedTotalSize,
+        );
+        completedBytes += preparedFiles[i].size;
       }
 
       saveTransferHistory({
@@ -442,6 +516,7 @@ export default function Home() {
       alert(error instanceof Error ? error.message : "Erreur pendant l'upload.");
     } finally {
       setLoading(false);
+      setUploadStatus("Préparation de l'envoi...");
     }
   }
 
@@ -470,7 +545,10 @@ export default function Home() {
 
   const totalSize = files.reduce((sum, file) => sum + file.size, 0);
   const expirationDate = getExpirationDate(expiresInDays);
-  const isOverLimit = files.length > MAX_FILE_COUNT || totalSize > MAX_TOTAL_SIZE;
+  const selectionDecision = shouldOptimizeTransfer(files);
+  const isOverLimit =
+    totalSize > MAX_TOTAL_SIZE ||
+    (files.length > MAX_FILE_COUNT && !selectionDecision.shouldOptimize);
 
   return (
     <main className="fastdrop-bg relative min-h-screen overflow-hidden text-white">
@@ -553,7 +631,7 @@ export default function Home() {
               onDrop={(event) => {
                 event.preventDefault();
                 setIsDragging(false);
-                addFiles(event.dataTransfer.files);
+                void handleDrop(event.dataTransfer);
               }}
               className={[
                 "group flex cursor-pointer flex-col items-center justify-center rounded-[1.5rem] border border-dashed text-center transition duration-300",
@@ -603,7 +681,7 @@ export default function Home() {
 
                 <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
                   <p className="font-semibold text-white/75">Fichiers max</p>
-                  <p className="mt-1">{MAX_FILE_COUNT} fichiers</p>
+                  <p className="mt-1">{MAX_FILE_COUNT} en direct, lots préparés automatiquement</p>
                 </div>
 
                 <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
@@ -642,7 +720,7 @@ export default function Home() {
                       </button>
 
                       <span className="rounded-full bg-violet-500/20 px-3 py-1 text-sm text-violet-200">
-                        {files.length}/{MAX_FILE_COUNT}
+                        {files.length} sélectionné{files.length > 1 ? "s" : ""}
                       </span>
                     </div>
                   </div>
@@ -650,7 +728,7 @@ export default function Home() {
                   <div className="space-y-2">
                     {files.map((file, index) => (
                       <div
-                        key={`${file.name}-${file.size}-${file.lastModified}`}
+                        key={getFileKey(file)}
                         className="flex items-center justify-between gap-3 rounded-2xl border border-white/5 bg-black/25 px-4 py-3"
                       >
                         <div className="flex min-w-0 items-center gap-3">
@@ -779,14 +857,14 @@ export default function Home() {
                     disabled={loading || isOverLimit}
                     className="w-full min-w-0 max-w-full rounded-2xl bg-gradient-to-r from-blue-500 via-indigo-500 to-violet-600 px-6 py-4 text-base font-bold text-white shadow-[0_18px_55px_rgba(79,70,229,0.35)] transition hover:-translate-y-1 hover:shadow-[0_24px_70px_rgba(79,70,229,0.5)] disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {loading ? "Upload en cours..." : "Créer le lien de partage"}
+                    {loading ? uploadStatus : "Créer le lien de partage"}
                   </button>
                 </div>
 
                 {loading && (
                   <div className="order-3">
                     <div className="mb-2 flex justify-between text-sm text-white/60">
-                      <span>Upload en cours</span>
+                      <span>{uploadStatus}</span>
                       <span>{progress}%</span>
                     </div>
 

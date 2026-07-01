@@ -39,6 +39,7 @@ const MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024;
 const MAX_FILE_SIZE = MAX_TOTAL_SIZE;
 const MULTIPART_CHUNK_SIZE = 50 * 1024 * 1024;
 const MAX_EXPIRATION_DAYS = 30;
+const MAX_SENDER_NAME_LENGTH = 80;
 const MAX_TRANSFER_TITLE_LENGTH = 80;
 const MAX_TRANSFER_MESSAGE_LENGTH = 1000;
 const textEncoder = new TextEncoder();
@@ -518,6 +519,7 @@ export default {
     if (request.method === "POST" && url.pathname === "/transfers") {
       const body = await request.json<{
         title?: string;
+        senderName?: string;
         message?: string;
         password?: string;
         expiresInDays?: number;
@@ -587,6 +589,9 @@ export default {
       const title = body.title?.trim()
         ? body.title.trim().slice(0, MAX_TRANSFER_TITLE_LENGTH)
         : null;
+      const senderName = body.senderName?.trim()
+        ? body.senderName.trim().slice(0, MAX_SENDER_NAME_LENGTH)
+        : null;
       const message = body.message?.trim()
         ? body.message.trim().slice(0, MAX_TRANSFER_MESSAGE_LENGTH)
         : null;
@@ -595,13 +600,14 @@ export default {
 
       await env.DB.prepare(
         `INSERT INTO transfers 
-        (id, slug, title, message, password_hash, delete_token_hash, expires_at, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        (id, slug, title, sender_name, message, password_hash, delete_token_hash, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           transferId,
           slug,
           title,
+          senderName,
           message,
           passwordHash,
           deleteTokenHash,
@@ -1026,7 +1032,7 @@ export default {
       const slug = url.pathname.replace("/transfers/", "");
 
       const transfer = await env.DB.prepare(
-        `SELECT id, slug, title, message, password_hash, expires_at, created_at
+        `SELECT id, slug, title, sender_name, message, password_hash, expires_at, created_at
          FROM transfers
          WHERE slug = ?`
       )
@@ -1035,6 +1041,7 @@ export default {
           id: string;
           slug: string;
           title: string | null;
+          sender_name: string | null;
           message: string | null;
           password_hash: string | null;
           expires_at: string;
@@ -1061,6 +1068,7 @@ export default {
       return json(request, env, {
         slug: transfer.slug,
         title: transfer.title,
+        senderName: transfer.sender_name,
         message: transfer.message,
         protected: Boolean(transfer.password_hash),
         expiresAt: transfer.expires_at,

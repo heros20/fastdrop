@@ -15,10 +15,10 @@ type UploadResponseFile = {
   id: string;
   name: string;
   uploadUrl?: string;
-  startUrl: string;
-  uploadPartUrl: string;
-  completeUrl: string;
-  abortUrl: string;
+  startUrl?: string;
+  uploadPartUrl?: string;
+  completeUrl?: string;
+  abortUrl?: string;
 };
 
 type UploadResponse = {
@@ -107,6 +107,7 @@ export default function Home() {
 
   const [files, setFiles] = useState<File[]>([]);
   const [transferName, setTransferName] = useState("");
+  const [senderName, setSenderName] = useState("");
   const [transferMessage, setTransferMessage] = useState("");
   const [expiresInDays, setExpiresInDays] = useState(7);
   const [password, setPassword] = useState("");
@@ -282,6 +283,14 @@ export default function Home() {
       return;
     }
 
+    if (
+      !uploadFileData.startUrl ||
+      !uploadFileData.uploadPartUrl ||
+      !uploadFileData.completeUrl
+    ) {
+      throw new Error("Configuration d'upload incomplète.");
+    }
+
     const startResponse = await fetch(uploadFileData.startUrl, {
       method: "POST",
     });
@@ -379,6 +388,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title,
+          senderName: senderName.trim() || undefined,
           message: transferMessage.trim() || undefined,
           expiresInDays,
           password: password.trim() || undefined,
@@ -435,9 +445,18 @@ export default function Home() {
     alert("Lien copié.");
   }
 
+  async function copyLinkAndOpen(url: string) {
+    await navigator.clipboard.writeText(link);
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
   const totalSize = files.reduce((sum, file) => sum + file.size, 0);
   const expirationDate = getExpirationDate(expiresInDays);
   const isOverLimit = files.length > MAX_FILE_COUNT || totalSize > MAX_TOTAL_SIZE;
+  const encodedLink = encodeURIComponent(link);
+  const shareText = encodeURIComponent(`Voici mon lien FastDrop : ${link}`);
+  const facebookShareUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodedLink}`;
+  const whatsAppShareUrl = `https://wa.me/?text=${shareText}`;
 
   return (
     <main className="fastdrop-bg relative min-h-screen overflow-hidden text-white">
@@ -674,6 +693,23 @@ export default function Home() {
                     </p>
                   </label>
 
+                  <label className="block rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+                    <span className="mb-3 block text-sm font-semibold text-white/80">
+                      Nom de l&apos;expéditeur
+                    </span>
+                    <input
+                      value={senderName}
+                      onChange={(event) => setSenderName(event.target.value)}
+                      type="text"
+                      maxLength={80}
+                      placeholder="Ex : Kevin Bigoni"
+                      className="w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-blue-400 focus:shadow-[0_0_30px_rgba(59,130,246,0.25)]"
+                    />
+                    <p className="mt-3 text-xs text-white/40">
+                      Optionnel. Affiché aux destinataires.
+                    </p>
+                  </label>
+
                   <label className="block rounded-3xl border border-white/10 bg-white/[0.04] p-5 md:col-span-2 xl:col-span-2 xl:row-span-2">
                     <span className="mb-3 block text-sm font-semibold text-white/80">
                       Message optionnel
@@ -793,11 +829,48 @@ export default function Home() {
                   </button>
                 </div>
 
+                <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  <a
+                    href={facebookShareUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center text-sm font-semibold text-white/75 transition hover:border-blue-300/40 hover:bg-white/10 hover:text-white"
+                  >
+                    Facebook
+                  </a>
+
+                  <button
+                    type="button"
+                    onClick={() => copyLinkAndOpen("https://www.messenger.com/")}
+                    className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/75 transition hover:border-blue-300/40 hover:bg-white/10 hover:text-white"
+                  >
+                    Messenger
+                  </button>
+
+                  <a
+                    href={whatsAppShareUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center text-sm font-semibold text-white/75 transition hover:border-emerald-300/40 hover:bg-white/10 hover:text-white"
+                  >
+                    WhatsApp
+                  </a>
+
+                  <button
+                    type="button"
+                    onClick={() => copyLinkAndOpen("https://discord.com/channels/@me")}
+                    className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/75 transition hover:border-violet-300/40 hover:bg-white/10 hover:text-white"
+                  >
+                    Discord
+                  </button>
+                </div>
+
                 <button
                   type="button"
                   onClick={() => {
                     setFiles([]);
                     setTransferName("");
+                    setSenderName("");
                     setTransferMessage("");
                     setPassword("");
                     setLink("");

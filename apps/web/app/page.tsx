@@ -21,6 +21,9 @@ const MAX_EXPIRATION_DAYS = 30;
 const TRANSFER_HISTORY_KEY = "fastdrop:transfer-history";
 const TRANSFER_HISTORY_CHANGED_EVENT = "fastdrop:transfer-history-changed";
 const MAX_HISTORY_ITEMS = 10;
+const EMPTY_TRANSFER_HISTORY: TransferHistoryItem[] = [];
+let cachedTransferHistoryRaw: string | null | undefined;
+let cachedTransferHistorySnapshot: TransferHistoryItem[] = EMPTY_TRANSFER_HISTORY;
 
 type UploadResponseFile = {
   id: string;
@@ -62,19 +65,37 @@ type TransferHistoryItem = {
 };
 
 function readTransferHistory() {
-  if (typeof window === "undefined") return [];
+  if (typeof window === "undefined") return EMPTY_TRANSFER_HISTORY;
 
   try {
     const storedHistory = window.localStorage.getItem(TRANSFER_HISTORY_KEY);
 
-    if (!storedHistory) return [];
+    if (storedHistory === cachedTransferHistoryRaw) {
+      return cachedTransferHistorySnapshot;
+    }
+
+    cachedTransferHistoryRaw = storedHistory;
+
+    if (!storedHistory) {
+      cachedTransferHistorySnapshot = EMPTY_TRANSFER_HISTORY;
+      return cachedTransferHistorySnapshot;
+    }
 
     const parsedHistory = JSON.parse(storedHistory) as TransferHistoryItem[];
 
-    return Array.isArray(parsedHistory) ? parsedHistory : [];
+    cachedTransferHistorySnapshot = Array.isArray(parsedHistory)
+      ? parsedHistory
+      : EMPTY_TRANSFER_HISTORY;
+
+    return cachedTransferHistorySnapshot;
   } catch {
-    return [];
+    cachedTransferHistorySnapshot = EMPTY_TRANSFER_HISTORY;
+    return cachedTransferHistorySnapshot;
   }
+}
+
+function getServerTransferHistorySnapshot() {
+  return EMPTY_TRANSFER_HISTORY;
 }
 
 function subscribeTransferHistory(onStoreChange: () => void) {
@@ -165,7 +186,7 @@ export default function Home() {
   const recentTransfers = useSyncExternalStore(
     subscribeTransferHistory,
     readTransferHistory,
-    () => [],
+    getServerTransferHistorySnapshot,
   );
 
   function saveTransferHistory(entry: TransferHistoryItem) {

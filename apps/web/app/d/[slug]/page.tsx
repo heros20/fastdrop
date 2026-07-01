@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
 const API = process.env.NEXT_PUBLIC_API_URL!;
@@ -119,7 +119,6 @@ function DownloadShell({
 
 export default function DownloadPage() {
   const params = useParams<{ slug: string }>();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const deleteToken = searchParams.get("delete_token");
 
@@ -129,6 +128,7 @@ export default function DownloadPage() {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [isDownloadingAll, setIsDownloadingAll] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDeleted, setIsDeleted] = useState(false);
 
   useEffect(() => {
     async function loadTransfer() {
@@ -240,10 +240,44 @@ export default function DownloadPage() {
         return;
       }
 
-      router.push("/");
+      setTransfer(null);
+      setIsDeleted(true);
     } finally {
       setIsDeleting(false);
     }
+  }
+
+  if (isDeleted) {
+    return (
+      <DownloadShell compact>
+        <div className="gradient-border w-full max-w-xl rounded-[2rem] p-[1px]">
+          <div className="rounded-[2rem] bg-[#070b18]/90 p-8 text-center backdrop-blur-xl">
+            <Image
+              src="/fd-logo.png"
+              alt=""
+              width={86}
+              height={86}
+              className="logo-float mx-auto mb-6"
+            />
+            <p className="mb-3 text-sm font-semibold uppercase tracking-[0.30em] text-emerald-200/70">
+              Transfert supprimé
+            </p>
+            <h1 className="text-3xl font-black tracking-tight">
+              Le lien n&apos;est plus accessible
+            </h1>
+            <p className="mx-auto mt-4 max-w-md text-sm leading-6 text-white/55">
+              Les fichiers et le lien de partage ont bien été supprimés.
+            </p>
+            <Link
+              href="/"
+              className="mt-7 inline-flex rounded-2xl bg-white px-6 py-3 font-bold text-black transition hover:bg-blue-100"
+            >
+              Retour à l&apos;accueil
+            </Link>
+          </div>
+        </div>
+      </DownloadShell>
+    );
   }
 
   if (error) {

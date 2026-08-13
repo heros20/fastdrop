@@ -25,6 +25,7 @@ type StreamFile = {
   size: number;
   password_hash: string | null;
   expires_at: string;
+  uploaded_file_count?: number;
 };
 
 type ZipCentralEntry = {
@@ -70,6 +71,46 @@ const streamableMimeTypesByExtension: Record<string, string> = {
   ".weba": "audio/webm",
   ".flac": "audio/flac",
 };
+const previewableMimeTypesByExtension: Record<string, string> = {
+  ".avif": "image/avif",
+  ".apng": "image/apng",
+  ".bmp": "image/bmp",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+  ".pdf": "application/pdf",
+  ".txt": "text/plain; charset=utf-8",
+  ".md": "text/plain; charset=utf-8",
+  ".markdown": "text/plain; charset=utf-8",
+  ".csv": "text/plain; charset=utf-8",
+  ".json": "text/plain; charset=utf-8",
+  ".xml": "text/plain; charset=utf-8",
+  ".html": "text/plain; charset=utf-8",
+  ".htm": "text/plain; charset=utf-8",
+  ".css": "text/plain; charset=utf-8",
+  ".js": "text/plain; charset=utf-8",
+  ".mjs": "text/plain; charset=utf-8",
+  ".cjs": "text/plain; charset=utf-8",
+  ".ts": "text/plain; charset=utf-8",
+  ".tsx": "text/plain; charset=utf-8",
+  ".jsx": "text/plain; charset=utf-8",
+  ".py": "text/plain; charset=utf-8",
+  ".java": "text/plain; charset=utf-8",
+  ".c": "text/plain; charset=utf-8",
+  ".h": "text/plain; charset=utf-8",
+  ".cpp": "text/plain; charset=utf-8",
+  ".sql": "text/plain; charset=utf-8",
+  ".log": "text/plain; charset=utf-8",
+};
+const previewableImageMimeTypes = new Set(
+  Object.values(previewableMimeTypesByExtension).filter((mimeType) =>
+    mimeType.startsWith("image/")
+  )
+);
 const crc32Table = new Uint32Array(256).map((_, index) => {
   let value = index;
 
@@ -188,6 +229,38 @@ function getStreamableMimeType(mimeType: string | null, fileName: string) {
   return streamableMimeTypesByExtension[extension] ?? null;
 }
 
+function getPreviewableMimeType(mimeType: string | null, fileName: string) {
+  const mediaMimeType = getStreamableMimeType(mimeType, fileName);
+
+  if (mediaMimeType) return mediaMimeType;
+
+  const normalizedMimeType = mimeType?.split(";", 1)[0].trim().toLowerCase() ?? "";
+
+  if (previewableImageMimeTypes.has(normalizedMimeType)) {
+    return normalizedMimeType;
+  }
+
+  if (normalizedMimeType === "application/pdf") {
+    return normalizedMimeType;
+  }
+
+  if (
+    normalizedMimeType.startsWith("text/") ||
+    normalizedMimeType === "application/json" ||
+    normalizedMimeType.endsWith("+json") ||
+    normalizedMimeType === "application/xml" ||
+    normalizedMimeType.endsWith("+xml")
+  ) {
+    return "text/plain; charset=utf-8";
+  }
+
+  const extensionIndex = fileName.lastIndexOf(".");
+  const extension =
+    extensionIndex >= 0 ? fileName.slice(extensionIndex).toLowerCase() : "";
+
+  return previewableMimeTypesByExtension[extension] ?? null;
+}
+
 function streamAccessPayload(fileId: string, expires: number) {
   return `${fileId}:${expires}`;
 }
@@ -284,17 +357,17 @@ async function getStreamFile(env: Env, fileId: string) {
       f.mime_type,
       f.size,
       t.password_hash,
-      t.expires_at
-    FROM files f
-    JOIN transfers t ON t.id = f.transfer_id
-    WHERE f.id = ?
-      AND f.upload_status = 'uploaded'
-      AND (
+      t.expires_at,
+      (
         SELECT COUNT(*)
         FROM files transfer_files
         WHERE transfer_files.transfer_id = f.transfer_id
           AND transfer_files.upload_status = 'uploaded'
-      ) = 1`
+      ) AS uploaded_file_count
+    FROM files f
+    JOIN transfers t ON t.id = f.transfer_id
+    WHERE f.id = ?
+      AND f.upload_status = 'uploaded'`
   )
     .bind(fileId)
     .first<StreamFile>();
@@ -314,6 +387,7 @@ function createMediaHeaders(
   headers.set("Content-Type", mediaMimeType);
   headers.set("Content-Length", String(contentLength));
   headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+  headers.set("X-Content-Type-Options", "nosniff");
   headers.set(
     "Content-Disposition",
     `inline; filename*=UTF-8''${encodeURIComponent(row.original_name)}`
@@ -1421,6 +1495,63 @@ export default {
       });
     }
 
+    if (request.method === "POST" && url.pathname.startsWith("/preview-access/")) {
+      const fileId = url.pathname.replace("/preview-access/", "");
+      const body = await request.json<{ password?: string }>();
+      const row = await getStreamFile(env, fileId);
+
+      if (!row) {
+        return json(request, env, { error: "Fichier indisponible." }, 404);
+      }
+
+      const transferExpiresAt = new Date(row.expires_at).getTime();
+
+      if (transferExpiresAt < Date.now()) {
+        return json(request, env, { error: "Transfert expiré." }, 410);
+      }
+
+      const previewMimeType = getPreviewableMimeType(
+        row.mime_type,
+        row.original_name
+      );
+
+      if (!previewMimeType) {
+        return json(
+          request,
+          env,
+          { error: "Ce fichier ne peut pas être prévisualisé dans le navigateur." },
+          415
+        );
+      }
+
+      if (row.password_hash) {
+        const givenHash = body.password ? await sha256(body.password) : "";
+
+        if (givenHash !== row.password_hash) {
+          return json(request, env, { error: "Mot de passe incorrect." }, 401);
+        }
+      }
+
+      const expires = Math.min(
+        Math.floor(transferExpiresAt / 1000),
+        Math.floor(Date.now() / 1000) + STREAM_ACCESS_TTL_SECONDS
+      );
+      const token = await createStreamAccessToken(
+        row.password_hash ?? row.r2_key,
+        fileId,
+        expires
+      );
+      const previewUrl = new URL(`/preview/${encodeURIComponent(fileId)}`, url.origin);
+      previewUrl.searchParams.set("expires", String(expires));
+      previewUrl.searchParams.set("token", token);
+
+      return json(request, env, {
+        url: previewUrl.toString(),
+        mimeType: previewMimeType,
+        expiresAt: new Date(expires * 1000).toISOString(),
+      });
+    }
+
     if (
       (request.method === "GET" || request.method === "HEAD") &&
       url.pathname.startsWith("/public-stream/")
@@ -1430,6 +1561,10 @@ export default {
 
       if (!row) {
         return json(request, env, { error: "Fichier indisponible." }, 404);
+      }
+
+      if (row.uploaded_file_count !== 1) {
+        return json(request, env, { error: "Aperçu social indisponible." }, 404);
       }
 
       if (row.password_hash) {
@@ -1460,6 +1595,65 @@ export default {
         row,
         mediaMimeType,
         "public, max-age=300, no-transform"
+      );
+    }
+
+    if (
+      (request.method === "GET" || request.method === "HEAD") &&
+      url.pathname.startsWith("/preview/")
+    ) {
+      const fileId = url.pathname.replace("/preview/", "");
+      const expires = Number(url.searchParams.get("expires"));
+      const token = url.searchParams.get("token") ?? "";
+
+      if (
+        !Number.isSafeInteger(expires) ||
+        expires <= Math.floor(Date.now() / 1000)
+      ) {
+        return json(request, env, { error: "Accès de prévisualisation expiré." }, 401);
+      }
+
+      const row = await getStreamFile(env, fileId);
+
+      if (!row) {
+        return json(request, env, { error: "Fichier indisponible." }, 404);
+      }
+
+      if (new Date(row.expires_at).getTime() < Date.now()) {
+        return json(request, env, { error: "Transfert expiré." }, 410);
+      }
+
+      const previewMimeType = getPreviewableMimeType(
+        row.mime_type,
+        row.original_name
+      );
+
+      if (!previewMimeType) {
+        return json(
+          request,
+          env,
+          { error: "Ce fichier ne peut pas être prévisualisé dans le navigateur." },
+          415
+        );
+      }
+
+      const hasValidToken = await verifyStreamAccessToken(
+        token,
+        row.password_hash ?? row.r2_key,
+        fileId,
+        expires
+      );
+
+      if (!hasValidToken) {
+        return json(request, env, { error: "Accès de prévisualisation invalide." }, 401);
+      }
+
+      return createMediaResponse(
+        request,
+        env,
+        row,
+        previewMimeType,
+        "private, no-store"
       );
     }
 

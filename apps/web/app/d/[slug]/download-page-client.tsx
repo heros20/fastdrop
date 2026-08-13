@@ -6,7 +6,8 @@ import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   getMediaCandidates,
-  type MediaKind,
+  getNonMediaPreview,
+  type PreviewKind,
 } from "@/lib/shared-media";
 
 const API = process.env.NEXT_PUBLIC_API_URL!;
@@ -28,13 +29,13 @@ type Transfer = {
   files: TransferFile[];
 };
 
-type MediaPreview = {
+type FilePreview = {
   file: TransferFile;
-  kind: MediaKind;
+  kind: PreviewKind;
   mimeType: string;
 };
 
-function getPlayableMedia(file: TransferFile): MediaPreview | null {
+function getPlayableMedia(file: TransferFile): FilePreview | null {
   for (const candidate of getMediaCandidates(file)) {
     const mediaElement = document.createElement(candidate.kind);
 
@@ -44,6 +45,22 @@ function getPlayableMedia(file: TransferFile): MediaPreview | null {
   }
 
   return null;
+}
+
+function getFilePreview(file: TransferFile): FilePreview | null {
+  const playableMedia = getPlayableMedia(file);
+
+  if (playableMedia) return playableMedia;
+
+  const preview = getNonMediaPreview(file);
+
+  return preview ? { file, ...preview } : null;
+}
+
+function getPreviewActionLabel(kind: PreviewKind) {
+  if (kind === "video") return "Regarder";
+  if (kind === "audio") return "Écouter";
+  return "Voir";
 }
 
 function formatSize(size: number) {
@@ -151,10 +168,10 @@ export default function DownloadPageClient() {
   const [isDownloadingAll, setIsDownloadingAll] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDeleted, setIsDeleted] = useState(false);
-  const [mediaPreview, setMediaPreview] = useState<MediaPreview | null>(null);
-  const [streamUrl, setStreamUrl] = useState<string | null>(null);
-  const [isStartingStream, setIsStartingStream] = useState(false);
-  const [streamError, setStreamError] = useState("");
+  const [activePreview, setActivePreview] = useState<FilePreview | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState("");
 
   useEffect(() => {
     async function loadTransfer() {
@@ -166,12 +183,8 @@ export default function DownloadPageClient() {
         }
 
         const data = (await response.json()) as Transfer;
-        const onlyFile = data.files.length === 1 ? data.files[0] : null;
 
         setTransfer(data);
-        setMediaPreview(onlyFile ? getPlayableMedia(onlyFile) : null);
-        setStreamUrl(null);
-        setStreamError("");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Erreur inconnue.");
       }
@@ -180,14 +193,42 @@ export default function DownloadPageClient() {
     loadTransfer();
   }, [params.slug]);
 
-  async function startStreaming() {
-    if (!mediaPreview) return;
+  useEffect(() => {
+    if (!activePreview) return;
 
-    setIsStartingStream(true);
-    setStreamError("");
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setActivePreview(null);
+        setPreviewUrl(null);
+        setPreviewError("");
+      }
+    }
+
+    window.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      window.removeEventListener("keydown", closeOnEscape);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [activePreview]);
+
+  function closePreview() {
+    setActivePreview(null);
+    setPreviewUrl(null);
+    setPreviewError("");
+  }
+
+  async function openPreview(preview: FilePreview) {
+    setActivePreview(preview);
+    setPreviewUrl(null);
+    setPreviewingId(preview.file.id);
+    setPreviewError("");
 
     try {
-      const response = await fetch(`${API}/stream-access/${mediaPreview.file.id}`, {
+      const response = await fetch(`${API}/preview-access/${preview.file.id}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -198,23 +239,34 @@ export default function DownloadPageClient() {
       });
       const data = (await response.json().catch(() => null)) as {
         url?: string;
+        mimeType?: string;
         error?: string;
       } | null;
 
       if (!response.ok || !data?.url) {
         throw new Error(
           data?.error ??
-            "Lecture impossible. Vérifie le mot de passe si nécessaire.",
+            "Prévisualisation impossible. Vérifie le mot de passe si nécessaire.",
         );
       }
 
-      setStreamUrl(data.url);
+      setActivePreview((currentPreview) =>
+        currentPreview?.file.id === preview.file.id
+          ? {
+              ...currentPreview,
+              mimeType: data.mimeType ?? currentPreview.mimeType,
+            }
+          : currentPreview,
+      );
+      setPreviewUrl(data.url);
     } catch (err) {
-      setStreamError(
-        err instanceof Error ? err.message : "Lecture impossible pour le moment.",
+      setPreviewError(
+        err instanceof Error
+          ? err.message
+          : "Prévisualisation impossible pour le moment.",
       );
     } finally {
-      setIsStartingStream(false);
+      setPreviewingId(null);
     }
   }
 
@@ -460,98 +512,12 @@ export default function DownloadPageClient() {
               </span>
               <input
                 value={password}
-                onChange={(event) => {
-                  setPassword(event.target.value);
-                  setStreamError("");
-                }}
+                onChange={(event) => setPassword(event.target.value)}
                 type="password"
                 placeholder="Entre le mot de passe"
                 className="w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-violet-400 focus:shadow-[0_0_30px_rgba(139,92,246,0.25)]"
               />
             </label>
-          )}
-
-          {mediaPreview && (
-            <div className="mt-5 overflow-hidden rounded-3xl border border-blue-300/20 bg-blue-400/10">
-              <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-blue-200/60">
-                    {mediaPreview.kind === "video"
-                      ? "Visionnage en direct"
-                      : "Écoute en direct"}
-                  </p>
-                  <p className="mt-2 truncate font-semibold text-blue-50">
-                    {mediaPreview.file.original_name}
-                  </p>
-                  <p className="mt-1 text-sm text-white/50">
-                    Lance la lecture ici ou télécharge le fichier plus bas.
-                  </p>
-                </div>
-
-                {!streamUrl && (
-                  <button
-                    type="button"
-                    onClick={startStreaming}
-                    disabled={isStartingStream}
-                    className="shrink-0 rounded-2xl bg-blue-300 px-5 py-3 text-sm font-bold text-slate-950 transition hover:bg-blue-200 disabled:cursor-wait disabled:opacity-60"
-                  >
-                    {isStartingStream
-                      ? "Ouverture..."
-                      : mediaPreview.kind === "video"
-                        ? "Regarder en direct"
-                        : "Écouter en direct"}
-                  </button>
-                )}
-              </div>
-
-              {streamError && (
-                <p
-                  role="alert"
-                  className="mx-5 mb-5 rounded-2xl border border-red-300/20 bg-red-500/10 px-4 py-3 text-sm text-red-100"
-                >
-                  {streamError}
-                </p>
-              )}
-
-              {streamUrl && mediaPreview.kind === "video" && (
-                <video
-                  controls
-                  autoPlay
-                  playsInline
-                  preload="metadata"
-                  crossOrigin="anonymous"
-                  className="aspect-video w-full bg-black object-contain"
-                  onError={() =>
-                    setStreamError(
-                      "La lecture vidéo a échoué. Tu peux toujours télécharger le fichier.",
-                    )
-                  }
-                >
-                  <source src={streamUrl} type={mediaPreview.mimeType} />
-                  Ton navigateur ne peut pas lire cette vidéo.
-                </video>
-              )}
-
-              {streamUrl && mediaPreview.kind === "audio" && (
-                <div className="border-t border-white/10 bg-black/25 p-5">
-                  <audio
-                    controls
-                    autoPlay
-                    preload="metadata"
-                    crossOrigin="anonymous"
-                    className="w-full"
-                    onError={() =>
-                      setStreamError(
-                        "La lecture audio a échoué. Tu peux toujours télécharger le fichier.",
-                      )
-                    }
-                  >
-                    <source src={streamUrl} type={mediaPreview.mimeType} />
-                    Ton navigateur ne peut pas lire ce fichier audio.
-                  </audio>
-                </div>
-              )}
-            </div>
           )}
 
           <div className="mt-5 flex flex-col gap-3 rounded-3xl border border-emerald-300/15 bg-emerald-300/10 p-5 sm:flex-row sm:items-center sm:justify-between">
@@ -593,32 +559,52 @@ export default function DownloadPageClient() {
           )}
 
           <div className="mt-5 space-y-3">
-            {transfer.files.map((file) => (
-              <div
-                key={file.id}
-                className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-black/25 p-4 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-black/30 text-xs font-black text-blue-100">
-                    {getFileTypeLabel(file)}
-                  </span>
+            {transfer.files.map((file) => {
+              const preview = getFilePreview(file);
 
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold">{file.original_name}</p>
-                    <p className="mt-1 text-sm text-white/45">{formatSize(file.size)}</p>
+              return (
+                <div
+                  key={file.id}
+                  className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-black/25 p-4 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-black/30 text-xs font-black text-blue-100">
+                      {getFileTypeLabel(file)}
+                    </span>
+
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold">{file.original_name}</p>
+                      <p className="mt-1 text-sm text-white/45">{formatSize(file.size)}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    {preview && (
+                      <button
+                        type="button"
+                        onClick={() => openPreview(preview)}
+                        disabled={previewingId !== null}
+                        aria-label={`${getPreviewActionLabel(preview.kind)} ${file.original_name}`}
+                        className="rounded-2xl border border-blue-200/25 bg-blue-400/15 px-5 py-3 text-sm font-bold text-blue-50 transition hover:border-blue-200/45 hover:bg-blue-400/25 disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {previewingId === file.id
+                          ? "Ouverture..."
+                          : getPreviewActionLabel(preview.kind)}
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(file)}
+                      disabled={downloadingId === file.id}
+                      className="rounded-2xl bg-white px-5 py-3 text-sm font-bold text-black transition hover:bg-blue-100 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {downloadingId === file.id ? "Préparation..." : "Télécharger"}
+                    </button>
                   </div>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => downloadFile(file)}
-                  disabled={downloadingId === file.id}
-                  className="shrink-0 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-black transition hover:bg-blue-100 disabled:cursor-wait disabled:opacity-60"
-                >
-                  {downloadingId === file.id ? "Préparation..." : "Télécharger"}
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="mt-6 flex justify-center">
@@ -631,6 +617,148 @@ export default function DownloadPageClient() {
           </div>
         </div>
       </div>
+
+      {activePreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-8">
+          <button
+            type="button"
+            aria-label="Fermer l’aperçu"
+            onClick={closePreview}
+            className="absolute inset-0 cursor-default bg-[#02040c]/90 backdrop-blur-md"
+          />
+
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="file-preview-title"
+            className="relative z-10 flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-[2rem] border border-white/15 bg-[#080d1b] shadow-[0_0_100px_rgba(37,99,235,0.25)]"
+          >
+            <header className="flex items-center justify-between gap-4 border-b border-white/10 px-5 py-4 sm:px-6">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-blue-200/55">
+                  {activePreview.kind === "video"
+                    ? "Vidéo"
+                    : activePreview.kind === "audio"
+                      ? "Audio"
+                      : activePreview.kind === "image"
+                        ? "Image"
+                        : activePreview.kind === "pdf"
+                          ? "Document PDF"
+                          : "Fichier texte"}
+                </p>
+                <h2
+                  id="file-preview-title"
+                  className="mt-1 truncate text-base font-bold text-white sm:text-lg"
+                >
+                  {activePreview.file.original_name}
+                </h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={closePreview}
+                autoFocus
+                className="shrink-0 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/70 transition hover:bg-white/10 hover:text-white"
+              >
+                Fermer
+              </button>
+            </header>
+
+            <div className="min-h-48 overflow-auto bg-black/35">
+              {!previewUrl && !previewError && (
+                <div className="flex min-h-64 items-center justify-center p-8 text-sm text-white/55">
+                  Préparation de l’aperçu…
+                </div>
+              )}
+
+              {previewError && (
+                <div className="flex min-h-64 items-center justify-center p-8">
+                  <p
+                    role="alert"
+                    className="max-w-xl rounded-2xl border border-red-300/20 bg-red-500/10 px-5 py-4 text-center text-sm text-red-100"
+                  >
+                    {previewError}
+                  </p>
+                </div>
+              )}
+
+              {previewUrl && !previewError && activePreview.kind === "video" && (
+                <video
+                  controls
+                  autoPlay
+                  playsInline
+                  preload="metadata"
+                  crossOrigin="anonymous"
+                  className="max-h-[76vh] w-full bg-black object-contain"
+                  onError={() =>
+                    setPreviewError(
+                      "La lecture vidéo a échoué. Tu peux toujours télécharger le fichier.",
+                    )
+                  }
+                >
+                  <source src={previewUrl} type={activePreview.mimeType} />
+                  Ton navigateur ne peut pas lire cette vidéo.
+                </video>
+              )}
+
+              {previewUrl && !previewError && activePreview.kind === "audio" && (
+                <div className="flex min-h-64 items-center justify-center p-6 sm:p-10">
+                  <audio
+                    controls
+                    autoPlay
+                    preload="metadata"
+                    crossOrigin="anonymous"
+                    className="w-full max-w-3xl"
+                    onError={() =>
+                      setPreviewError(
+                        "La lecture audio a échoué. Tu peux toujours télécharger le fichier.",
+                      )
+                    }
+                  >
+                    <source src={previewUrl} type={activePreview.mimeType} />
+                    Ton navigateur ne peut pas lire ce fichier audio.
+                  </audio>
+                </div>
+              )}
+
+              {previewUrl && !previewError && activePreview.kind === "image" && (
+                <div className="flex min-h-64 items-center justify-center p-4 sm:p-6">
+                  <Image
+                    src={previewUrl}
+                    alt={activePreview.file.original_name}
+                    width={1600}
+                    height={1200}
+                    unoptimized
+                    className="h-auto max-h-[72vh] w-auto max-w-full object-contain"
+                    onError={() =>
+                      setPreviewError(
+                        "L’image ne peut pas être affichée. Tu peux toujours la télécharger.",
+                      )
+                    }
+                  />
+                </div>
+              )}
+
+              {previewUrl && !previewError && activePreview.kind === "pdf" && (
+                <iframe
+                  src={previewUrl}
+                  title={`Aperçu de ${activePreview.file.original_name}`}
+                  className="h-[72vh] w-full bg-white"
+                />
+              )}
+
+              {previewUrl && !previewError && activePreview.kind === "text" && (
+                <iframe
+                  src={previewUrl}
+                  title={`Contenu de ${activePreview.file.original_name}`}
+                  sandbox=""
+                  className="h-[72vh] w-full bg-white"
+                />
+              )}
+            </div>
+          </section>
+        </div>
+      )}
     </DownloadShell>
   );
 }

@@ -1,7 +1,13 @@
 export type MediaKind = "video" | "audio";
+export type PreviewKind = MediaKind | "image" | "pdf" | "text";
 
 export type MediaDescriptor = {
   kind: MediaKind;
+  mimeType: string;
+};
+
+export type PreviewDescriptor = {
+  kind: PreviewKind;
   mimeType: string;
 };
 
@@ -28,6 +34,53 @@ const mediaMimeTypesByExtension: Record<string, MediaDescriptor> = {
   ".flac": { kind: "audio", mimeType: "audio/flac" },
 };
 
+const previewTypesByExtension: Record<string, PreviewDescriptor> = {
+  ".avif": { kind: "image", mimeType: "image/avif" },
+  ".apng": { kind: "image", mimeType: "image/apng" },
+  ".bmp": { kind: "image", mimeType: "image/bmp" },
+  ".gif": { kind: "image", mimeType: "image/gif" },
+  ".ico": { kind: "image", mimeType: "image/x-icon" },
+  ".jpeg": { kind: "image", mimeType: "image/jpeg" },
+  ".jpg": { kind: "image", mimeType: "image/jpeg" },
+  ".png": { kind: "image", mimeType: "image/png" },
+  ".svg": { kind: "image", mimeType: "image/svg+xml" },
+  ".webp": { kind: "image", mimeType: "image/webp" },
+  ".pdf": { kind: "pdf", mimeType: "application/pdf" },
+  ".txt": { kind: "text", mimeType: "text/plain" },
+  ".md": { kind: "text", mimeType: "text/plain" },
+  ".markdown": { kind: "text", mimeType: "text/plain" },
+  ".csv": { kind: "text", mimeType: "text/plain" },
+  ".json": { kind: "text", mimeType: "text/plain" },
+  ".xml": { kind: "text", mimeType: "text/plain" },
+  ".html": { kind: "text", mimeType: "text/plain" },
+  ".htm": { kind: "text", mimeType: "text/plain" },
+  ".css": { kind: "text", mimeType: "text/plain" },
+  ".js": { kind: "text", mimeType: "text/plain" },
+  ".mjs": { kind: "text", mimeType: "text/plain" },
+  ".cjs": { kind: "text", mimeType: "text/plain" },
+  ".ts": { kind: "text", mimeType: "text/plain" },
+  ".tsx": { kind: "text", mimeType: "text/plain" },
+  ".jsx": { kind: "text", mimeType: "text/plain" },
+  ".py": { kind: "text", mimeType: "text/plain" },
+  ".java": { kind: "text", mimeType: "text/plain" },
+  ".c": { kind: "text", mimeType: "text/plain" },
+  ".h": { kind: "text", mimeType: "text/plain" },
+  ".cpp": { kind: "text", mimeType: "text/plain" },
+  ".sql": { kind: "text", mimeType: "text/plain" },
+  ".log": { kind: "text", mimeType: "text/plain" },
+};
+const previewableImageMimeTypes = new Set(
+  Object.values(previewTypesByExtension)
+    .filter((preview) => preview.kind === "image")
+    .map((preview) => preview.mimeType),
+);
+
+function getExtension(fileName: string) {
+  const extensionIndex = fileName.lastIndexOf(".");
+
+  return extensionIndex >= 0 ? fileName.slice(extensionIndex).toLowerCase() : "";
+}
+
 export function getMediaCandidates(file: SharedMediaFile) {
   const candidates: MediaDescriptor[] = [];
   const storedMimeType = file.mime_type?.split(";", 1)[0].trim().toLowerCase();
@@ -38,11 +91,7 @@ export function getMediaCandidates(file: SharedMediaFile) {
     candidates.push({ kind: "audio", mimeType: storedMimeType });
   }
 
-  const extensionIndex = file.original_name.lastIndexOf(".");
-  const extension =
-    extensionIndex >= 0
-      ? file.original_name.slice(extensionIndex).toLowerCase()
-      : "";
+  const extension = getExtension(file.original_name);
   const extensionCandidate = mediaMimeTypesByExtension[extension];
 
   if (
@@ -61,4 +110,28 @@ export function getMediaCandidates(file: SharedMediaFile) {
 
 export function getShareableMedia(file: SharedMediaFile) {
   return getMediaCandidates(file)[0] ?? null;
+}
+
+export function getNonMediaPreview(file: SharedMediaFile) {
+  const normalizedMimeType = file.mime_type?.split(";", 1)[0].trim().toLowerCase();
+
+  if (normalizedMimeType && previewableImageMimeTypes.has(normalizedMimeType)) {
+    return { kind: "image", mimeType: normalizedMimeType } satisfies PreviewDescriptor;
+  }
+
+  if (normalizedMimeType === "application/pdf") {
+    return { kind: "pdf", mimeType: normalizedMimeType } satisfies PreviewDescriptor;
+  }
+
+  if (
+    normalizedMimeType?.startsWith("text/") ||
+    normalizedMimeType === "application/json" ||
+    normalizedMimeType?.endsWith("+json") ||
+    normalizedMimeType === "application/xml" ||
+    normalizedMimeType?.endsWith("+xml")
+  ) {
+    return { kind: "text", mimeType: "text/plain" } satisfies PreviewDescriptor;
+  }
+
+  return previewTypesByExtension[getExtension(file.original_name)] ?? null;
 }

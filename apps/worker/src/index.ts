@@ -42,7 +42,25 @@ const MAX_EXPIRATION_DAYS = 30;
 const MAX_SENDER_NAME_LENGTH = 80;
 const MAX_TRANSFER_TITLE_LENGTH = 80;
 const MAX_TRANSFER_MESSAGE_LENGTH = 1000;
+const STREAM_ACCESS_TTL_SECONDS = 4 * 60 * 60;
 const textEncoder = new TextEncoder();
+const streamableMimeTypesByExtension: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".webm": "video/webm",
+  ".ogv": "video/ogg",
+  ".mov": "video/quicktime",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".wave": "audio/wav",
+  ".m4a": "audio/mp4",
+  ".aac": "audio/aac",
+  ".ogg": "audio/ogg",
+  ".oga": "audio/ogg",
+  ".opus": "audio/ogg",
+  ".weba": "audio/webm",
+  ".flac": "audio/flac",
+};
 const crc32Table = new Uint32Array(256).map((_, index) => {
   let value = index;
 
@@ -82,7 +100,9 @@ function corsHeaders(request: Request, env: Env) {
   return {
     "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Range",
+    "Access-Control-Expose-Headers":
+      "Accept-Ranges, Content-Length, Content-Range, Content-Type",
     "Vary": "Origin",
   };
 }
@@ -123,9 +143,128 @@ async function sha256(value: string) {
   const data = new TextEncoder().encode(value);
   const hash = await crypto.subtle.digest("SHA-256", data);
 
-  return [...new Uint8Array(hash)]
+  return bytesToHex(hash);
+}
+
+function bytesToHex(value: ArrayBuffer | Uint8Array) {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+
+  return [...bytes]
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function hexToBytes(value: string) {
+  if (!/^[0-9a-f]{64}$/i.test(value)) return null;
+
+  return Uint8Array.from(value.match(/.{2}/g) ?? [], (byte) =>
+    Number.parseInt(byte, 16)
+  );
+}
+
+function getStreamableMimeType(mimeType: string | null, fileName: string) {
+  const normalizedMimeType = mimeType?.split(";", 1)[0].trim().toLowerCase() ?? "";
+
+  if (
+    normalizedMimeType.startsWith("video/") ||
+    normalizedMimeType.startsWith("audio/")
+  ) {
+    return normalizedMimeType;
+  }
+
+  const extensionIndex = fileName.lastIndexOf(".");
+  const extension =
+    extensionIndex >= 0 ? fileName.slice(extensionIndex).toLowerCase() : "";
+
+  return streamableMimeTypesByExtension[extension] ?? null;
+}
+
+function streamAccessPayload(fileId: string, expires: number) {
+  return `${fileId}:${expires}`;
+}
+
+async function createStreamAccessToken(
+  secret: string,
+  fileId: string,
+  expires: number
+) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    textEncoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    textEncoder.encode(streamAccessPayload(fileId, expires))
+  );
+
+  return bytesToHex(signature);
+}
+
+async function verifyStreamAccessToken(
+  token: string,
+  secret: string,
+  fileId: string,
+  expires: number
+) {
+  const signature = hexToBytes(token);
+
+  if (!signature) return false;
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    textEncoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"]
+  );
+
+  return crypto.subtle.verify(
+    "HMAC",
+    key,
+    signature,
+    textEncoder.encode(streamAccessPayload(fileId, expires))
+  );
+}
+
+function parseByteRange(
+  rangeHeader: string,
+  size: number
+): { offset: number; length: number } | null {
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
+
+  if (!match || size <= 0) return null;
+
+  const [, startValue, endValue] = match;
+
+  if (!startValue && !endValue) return null;
+
+  if (!startValue) {
+    const suffix = Number(endValue);
+
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) return null;
+
+    const length = Math.min(suffix, size);
+    return { offset: size - length, length };
+  }
+
+  const offset = Number(startValue);
+
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset >= size) return null;
+
+  if (!endValue) {
+    return { offset, length: size - offset };
+  }
+
+  const requestedEnd = Number(endValue);
+
+  if (!Number.isSafeInteger(requestedEnd) || requestedEnd < offset) return null;
+
+  const end = Math.min(requestedEnd, size - 1);
+  return { offset, length: end - offset + 1 };
 }
 
 function chunk<T>(items: T[], size: number) {
@@ -1073,6 +1212,204 @@ export default {
         protected: Boolean(transfer.password_hash),
         expiresAt: transfer.expires_at,
         files: files.results,
+      });
+    }
+
+    if (request.method === "POST" && url.pathname.startsWith("/stream-access/")) {
+      const fileId = url.pathname.replace("/stream-access/", "");
+      const body = await request.json<{ password?: string }>();
+
+      const row = await env.DB.prepare(
+        `SELECT
+          f.r2_key,
+          f.original_name,
+          f.mime_type,
+          f.size,
+          t.password_hash,
+          t.expires_at
+        FROM files f
+        JOIN transfers t ON t.id = f.transfer_id
+        WHERE f.id = ? AND f.upload_status = 'uploaded'`
+      )
+        .bind(fileId)
+        .first<{
+          r2_key: string;
+          original_name: string;
+          mime_type: string | null;
+          size: number;
+          password_hash: string | null;
+          expires_at: string;
+        }>();
+
+      if (!row) {
+        return json(request, env, { error: "Fichier indisponible." }, 404);
+      }
+
+      const transferExpiresAt = new Date(row.expires_at).getTime();
+
+      if (transferExpiresAt < Date.now()) {
+        return json(request, env, { error: "Transfert expiré." }, 410);
+      }
+
+      if (!getStreamableMimeType(row.mime_type, row.original_name)) {
+        return json(
+          request,
+          env,
+          { error: "Ce fichier ne peut pas être lu dans le navigateur." },
+          415
+        );
+      }
+
+      if (row.password_hash) {
+        const givenHash = body.password ? await sha256(body.password) : "";
+
+        if (givenHash !== row.password_hash) {
+          return json(request, env, { error: "Mot de passe incorrect." }, 401);
+        }
+      }
+
+      const expires = Math.min(
+        Math.floor(transferExpiresAt / 1000),
+        Math.floor(Date.now() / 1000) + STREAM_ACCESS_TTL_SECONDS
+      );
+      const token = await createStreamAccessToken(
+        row.password_hash ?? row.r2_key,
+        fileId,
+        expires
+      );
+      const streamUrl = new URL(`/stream/${encodeURIComponent(fileId)}`, url.origin);
+      streamUrl.searchParams.set("expires", String(expires));
+      streamUrl.searchParams.set("token", token);
+
+      return json(request, env, {
+        url: streamUrl.toString(),
+        expiresAt: new Date(expires * 1000).toISOString(),
+      });
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/stream/")) {
+      const fileId = url.pathname.replace("/stream/", "");
+      const expires = Number(url.searchParams.get("expires"));
+      const token = url.searchParams.get("token") ?? "";
+
+      if (
+        !Number.isSafeInteger(expires) ||
+        expires <= Math.floor(Date.now() / 1000)
+      ) {
+        return json(request, env, { error: "Accès de lecture expiré." }, 401);
+      }
+
+      const row = await env.DB.prepare(
+        `SELECT
+          f.r2_key,
+          f.original_name,
+          f.mime_type,
+          f.size,
+          t.password_hash,
+          t.expires_at
+        FROM files f
+        JOIN transfers t ON t.id = f.transfer_id
+        WHERE f.id = ? AND f.upload_status = 'uploaded'`
+      )
+        .bind(fileId)
+        .first<{
+          r2_key: string;
+          original_name: string;
+          mime_type: string | null;
+          size: number;
+          password_hash: string | null;
+          expires_at: string;
+        }>();
+
+      if (!row) {
+        return json(request, env, { error: "Fichier indisponible." }, 404);
+      }
+
+      if (new Date(row.expires_at).getTime() < Date.now()) {
+        return json(request, env, { error: "Transfert expiré." }, 410);
+      }
+
+      const mediaMimeType = getStreamableMimeType(
+        row.mime_type,
+        row.original_name
+      );
+
+      if (!mediaMimeType) {
+        return json(
+          request,
+          env,
+          { error: "Ce fichier ne peut pas être lu dans le navigateur." },
+          415
+        );
+      }
+
+      const hasValidToken = await verifyStreamAccessToken(
+        token,
+        row.password_hash ?? row.r2_key,
+        fileId,
+        expires
+      );
+
+      if (!hasValidToken) {
+        return json(request, env, { error: "Accès de lecture invalide." }, 401);
+      }
+
+      const rangeHeader = request.headers.get("Range");
+      const byteRange = rangeHeader
+        ? parseByteRange(rangeHeader, row.size)
+        : null;
+
+      if (rangeHeader && !byteRange) {
+        return new Response(null, {
+          status: 416,
+          headers: {
+            "Accept-Ranges": "bytes",
+            "Content-Range": `bytes */${row.size}`,
+            ...(corsHeaders(request, env) ?? {}),
+          },
+        });
+      }
+
+      const object = await env.FILES_BUCKET.get(
+        row.r2_key,
+        byteRange ? { range: byteRange } : undefined
+      );
+
+      if (!object) {
+        console.log(
+          JSON.stringify({
+            event: "r2-object-missing",
+            r2Key: row.r2_key,
+          })
+        );
+        return json(request, env, { error: "Fichier indisponible." }, 404);
+      }
+
+      const headers = new Headers(corsHeaders(request, env) ?? {});
+      headers.set("Accept-Ranges", "bytes");
+      headers.set("Cache-Control", "private, no-store");
+      headers.set("Content-Type", mediaMimeType);
+      headers.set(
+        "Content-Disposition",
+        `inline; filename*=UTF-8''${encodeURIComponent(row.original_name)}`
+      );
+      headers.set(
+        "Content-Length",
+        String(byteRange?.length ?? object.size)
+      );
+
+      if (byteRange) {
+        headers.set(
+          "Content-Range",
+          `bytes ${byteRange.offset}-${
+            byteRange.offset + byteRange.length - 1
+          }/${row.size}`
+        );
+      }
+
+      return new Response(object.body, {
+        status: byteRange ? 206 : 200,
+        headers,
       });
     }
 

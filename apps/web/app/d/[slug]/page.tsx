@@ -24,6 +24,74 @@ type Transfer = {
   files: TransferFile[];
 };
 
+type MediaKind = "video" | "audio";
+
+type MediaPreview = {
+  file: TransferFile;
+  kind: MediaKind;
+  mimeType: string;
+};
+
+const mediaMimeTypesByExtension: Record<
+  string,
+  { kind: MediaKind; mimeType: string }
+> = {
+  ".mp4": { kind: "video", mimeType: "video/mp4" },
+  ".m4v": { kind: "video", mimeType: "video/mp4" },
+  ".webm": { kind: "video", mimeType: "video/webm" },
+  ".ogv": { kind: "video", mimeType: "video/ogg" },
+  ".mov": { kind: "video", mimeType: "video/quicktime" },
+  ".mp3": { kind: "audio", mimeType: "audio/mpeg" },
+  ".wav": { kind: "audio", mimeType: "audio/wav" },
+  ".wave": { kind: "audio", mimeType: "audio/wav" },
+  ".m4a": { kind: "audio", mimeType: "audio/mp4" },
+  ".aac": { kind: "audio", mimeType: "audio/aac" },
+  ".ogg": { kind: "audio", mimeType: "audio/ogg" },
+  ".oga": { kind: "audio", mimeType: "audio/ogg" },
+  ".opus": { kind: "audio", mimeType: "audio/ogg" },
+  ".weba": { kind: "audio", mimeType: "audio/webm" },
+  ".flac": { kind: "audio", mimeType: "audio/flac" },
+};
+
+function getPlayableMedia(file: TransferFile): MediaPreview | null {
+  const candidates: Array<{ kind: MediaKind; mimeType: string }> = [];
+  const storedMimeType = file.mime_type?.split(";", 1)[0].trim().toLowerCase();
+
+  if (storedMimeType?.startsWith("video/")) {
+    candidates.push({ kind: "video", mimeType: storedMimeType });
+  } else if (storedMimeType?.startsWith("audio/")) {
+    candidates.push({ kind: "audio", mimeType: storedMimeType });
+  }
+
+  const extensionIndex = file.original_name.lastIndexOf(".");
+  const extension =
+    extensionIndex >= 0
+      ? file.original_name.slice(extensionIndex).toLowerCase()
+      : "";
+  const extensionCandidate = mediaMimeTypesByExtension[extension];
+
+  if (
+    extensionCandidate &&
+    !candidates.some(
+      (candidate) =>
+        candidate.kind === extensionCandidate.kind &&
+        candidate.mimeType === extensionCandidate.mimeType,
+    )
+  ) {
+    candidates.push(extensionCandidate);
+  }
+
+  for (const candidate of candidates) {
+    const mediaElement = document.createElement(candidate.kind);
+
+    if (mediaElement.canPlayType(candidate.mimeType)) {
+      return { file, ...candidate };
+    }
+  }
+
+  return null;
+}
+
 function formatSize(size: number) {
   if (size < 1024) return `${size} o`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} Ko`;
@@ -129,6 +197,10 @@ export default function DownloadPage() {
   const [isDownloadingAll, setIsDownloadingAll] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDeleted, setIsDeleted] = useState(false);
+  const [mediaPreview, setMediaPreview] = useState<MediaPreview | null>(null);
+  const [streamUrl, setStreamUrl] = useState<string | null>(null);
+  const [isStartingStream, setIsStartingStream] = useState(false);
+  const [streamError, setStreamError] = useState("");
 
   useEffect(() => {
     async function loadTransfer() {
@@ -139,8 +211,13 @@ export default function DownloadPage() {
           throw new Error("Transfert introuvable ou expiré.");
         }
 
-        const data = await response.json();
+        const data = (await response.json()) as Transfer;
+        const onlyFile = data.files.length === 1 ? data.files[0] : null;
+
         setTransfer(data);
+        setMediaPreview(onlyFile ? getPlayableMedia(onlyFile) : null);
+        setStreamUrl(null);
+        setStreamError("");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Erreur inconnue.");
       }
@@ -148,6 +225,44 @@ export default function DownloadPage() {
 
     loadTransfer();
   }, [params.slug]);
+
+  async function startStreaming() {
+    if (!mediaPreview) return;
+
+    setIsStartingStream(true);
+    setStreamError("");
+
+    try {
+      const response = await fetch(`${API}/stream-access/${mediaPreview.file.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          password: password.trim() || undefined,
+        }),
+      });
+      const data = (await response.json().catch(() => null)) as {
+        url?: string;
+        error?: string;
+      } | null;
+
+      if (!response.ok || !data?.url) {
+        throw new Error(
+          data?.error ??
+            "Lecture impossible. Vérifie le mot de passe si nécessaire.",
+        );
+      }
+
+      setStreamUrl(data.url);
+    } catch (err) {
+      setStreamError(
+        err instanceof Error ? err.message : "Lecture impossible pour le moment.",
+      );
+    } finally {
+      setIsStartingStream(false);
+    }
+  }
 
   async function downloadFile(file: TransferFile) {
     setDownloadingId(file.id);
@@ -391,12 +506,98 @@ export default function DownloadPage() {
               </span>
               <input
                 value={password}
-                onChange={(event) => setPassword(event.target.value)}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  setStreamError("");
+                }}
                 type="password"
                 placeholder="Entre le mot de passe"
                 className="w-full rounded-2xl border border-white/10 bg-[#080d1b] px-4 py-3 text-white outline-none transition placeholder:text-white/30 focus:border-violet-400 focus:shadow-[0_0_30px_rgba(139,92,246,0.25)]"
               />
             </label>
+          )}
+
+          {mediaPreview && (
+            <div className="mt-5 overflow-hidden rounded-3xl border border-blue-300/20 bg-blue-400/10">
+              <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-blue-200/60">
+                    {mediaPreview.kind === "video"
+                      ? "Visionnage en direct"
+                      : "Écoute en direct"}
+                  </p>
+                  <p className="mt-2 truncate font-semibold text-blue-50">
+                    {mediaPreview.file.original_name}
+                  </p>
+                  <p className="mt-1 text-sm text-white/50">
+                    Lance la lecture ici ou télécharge le fichier plus bas.
+                  </p>
+                </div>
+
+                {!streamUrl && (
+                  <button
+                    type="button"
+                    onClick={startStreaming}
+                    disabled={isStartingStream}
+                    className="shrink-0 rounded-2xl bg-blue-300 px-5 py-3 text-sm font-bold text-slate-950 transition hover:bg-blue-200 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {isStartingStream
+                      ? "Ouverture..."
+                      : mediaPreview.kind === "video"
+                        ? "Regarder en direct"
+                        : "Écouter en direct"}
+                  </button>
+                )}
+              </div>
+
+              {streamError && (
+                <p
+                  role="alert"
+                  className="mx-5 mb-5 rounded-2xl border border-red-300/20 bg-red-500/10 px-4 py-3 text-sm text-red-100"
+                >
+                  {streamError}
+                </p>
+              )}
+
+              {streamUrl && mediaPreview.kind === "video" && (
+                <video
+                  controls
+                  autoPlay
+                  playsInline
+                  preload="metadata"
+                  crossOrigin="anonymous"
+                  className="aspect-video w-full bg-black object-contain"
+                  onError={() =>
+                    setStreamError(
+                      "La lecture vidéo a échoué. Tu peux toujours télécharger le fichier.",
+                    )
+                  }
+                >
+                  <source src={streamUrl} type={mediaPreview.mimeType} />
+                  Ton navigateur ne peut pas lire cette vidéo.
+                </video>
+              )}
+
+              {streamUrl && mediaPreview.kind === "audio" && (
+                <div className="border-t border-white/10 bg-black/25 p-5">
+                  <audio
+                    controls
+                    autoPlay
+                    preload="metadata"
+                    crossOrigin="anonymous"
+                    className="w-full"
+                    onError={() =>
+                      setStreamError(
+                        "La lecture audio a échoué. Tu peux toujours télécharger le fichier.",
+                      )
+                    }
+                  >
+                    <source src={streamUrl} type={mediaPreview.mimeType} />
+                    Ton navigateur ne peut pas lire ce fichier audio.
+                  </audio>
+                </div>
+              )}
+            </div>
           )}
 
           <div className="mt-5 flex flex-col gap-3 rounded-3xl border border-emerald-300/15 bg-emerald-300/10 p-5 sm:flex-row sm:items-center sm:justify-between">

@@ -18,6 +18,15 @@ type ZipFile = {
   size: number;
 };
 
+type StreamFile = {
+  r2_key: string;
+  original_name: string;
+  mime_type: string | null;
+  size: number;
+  password_hash: string | null;
+  expires_at: string;
+};
+
 type ZipCentralEntry = {
   name: Uint8Array;
   crc32: number;
@@ -99,7 +108,7 @@ function corsHeaders(request: Request, env: Env) {
 
   return {
     "Access-Control-Allow-Origin": allowedOrigin,
-    "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,HEAD,POST,PUT,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Range",
     "Access-Control-Expose-Headers":
       "Accept-Ranges, Content-Length, Content-Range, Content-Type",
@@ -265,6 +274,131 @@ function parseByteRange(
 
   const end = Math.min(requestedEnd, size - 1);
   return { offset, length: end - offset + 1 };
+}
+
+async function getStreamFile(env: Env, fileId: string) {
+  return env.DB.prepare(
+    `SELECT
+      f.r2_key,
+      f.original_name,
+      f.mime_type,
+      f.size,
+      t.password_hash,
+      t.expires_at
+    FROM files f
+    JOIN transfers t ON t.id = f.transfer_id
+    WHERE f.id = ?
+      AND f.upload_status = 'uploaded'
+      AND (
+        SELECT COUNT(*)
+        FROM files transfer_files
+        WHERE transfer_files.transfer_id = f.transfer_id
+          AND transfer_files.upload_status = 'uploaded'
+      ) = 1`
+  )
+    .bind(fileId)
+    .first<StreamFile>();
+}
+
+function createMediaHeaders(
+  request: Request,
+  env: Env,
+  row: StreamFile,
+  mediaMimeType: string,
+  cacheControl: string,
+  contentLength: number
+) {
+  const headers = new Headers(corsHeaders(request, env) ?? {});
+  headers.set("Accept-Ranges", "bytes");
+  headers.set("Cache-Control", cacheControl);
+  headers.set("Content-Type", mediaMimeType);
+  headers.set("Content-Length", String(contentLength));
+  headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+  headers.set(
+    "Content-Disposition",
+    `inline; filename*=UTF-8''${encodeURIComponent(row.original_name)}`
+  );
+
+  return headers;
+}
+
+async function createMediaResponse(
+  request: Request,
+  env: Env,
+  row: StreamFile,
+  mediaMimeType: string,
+  cacheControl: string
+) {
+  if (request.method === "HEAD") {
+    const object = await env.FILES_BUCKET.head(row.r2_key);
+
+    if (!object) {
+      return json(request, env, { error: "Fichier indisponible." }, 404);
+    }
+
+    return new Response(null, {
+      headers: createMediaHeaders(
+        request,
+        env,
+        row,
+        mediaMimeType,
+        cacheControl,
+        object.size
+      ),
+    });
+  }
+
+  const rangeHeader = request.headers.get("Range");
+  const byteRange = rangeHeader ? parseByteRange(rangeHeader, row.size) : null;
+
+  if (rangeHeader && !byteRange) {
+    return new Response(null, {
+      status: 416,
+      headers: {
+        "Accept-Ranges": "bytes",
+        "Content-Range": `bytes */${row.size}`,
+        ...(corsHeaders(request, env) ?? {}),
+      },
+    });
+  }
+
+  const object = await env.FILES_BUCKET.get(
+    row.r2_key,
+    byteRange ? { range: byteRange } : undefined
+  );
+
+  if (!object) {
+    console.log(
+      JSON.stringify({
+        event: "r2-object-missing",
+        r2Key: row.r2_key,
+      })
+    );
+    return json(request, env, { error: "Fichier indisponible." }, 404);
+  }
+
+  const headers = createMediaHeaders(
+    request,
+    env,
+    row,
+    mediaMimeType,
+    cacheControl,
+    byteRange?.length ?? object.size
+  );
+
+  if (byteRange) {
+    headers.set(
+      "Content-Range",
+      `bytes ${byteRange.offset}-${
+        byteRange.offset + byteRange.length - 1
+      }/${row.size}`
+    );
+  }
+
+  return new Response(object.body, {
+    status: byteRange ? 206 : 200,
+    headers,
+  });
 }
 
 function chunk<T>(items: T[], size: number) {
@@ -1287,7 +1421,52 @@ export default {
       });
     }
 
-    if (request.method === "GET" && url.pathname.startsWith("/stream/")) {
+    if (
+      (request.method === "GET" || request.method === "HEAD") &&
+      url.pathname.startsWith("/public-stream/")
+    ) {
+      const fileId = url.pathname.replace("/public-stream/", "");
+      const row = await getStreamFile(env, fileId);
+
+      if (!row) {
+        return json(request, env, { error: "Fichier indisponible." }, 404);
+      }
+
+      if (row.password_hash) {
+        return json(request, env, { error: "Accès public non autorisé." }, 401);
+      }
+
+      if (new Date(row.expires_at).getTime() < Date.now()) {
+        return json(request, env, { error: "Transfert expiré." }, 410);
+      }
+
+      const mediaMimeType = getStreamableMimeType(
+        row.mime_type,
+        row.original_name
+      );
+
+      if (!mediaMimeType) {
+        return json(
+          request,
+          env,
+          { error: "Ce fichier ne peut pas être lu dans le navigateur." },
+          415
+        );
+      }
+
+      return createMediaResponse(
+        request,
+        env,
+        row,
+        mediaMimeType,
+        "public, max-age=300, no-transform"
+      );
+    }
+
+    if (
+      (request.method === "GET" || request.method === "HEAD") &&
+      url.pathname.startsWith("/stream/")
+    ) {
       const fileId = url.pathname.replace("/stream/", "");
       const expires = Number(url.searchParams.get("expires"));
       const token = url.searchParams.get("token") ?? "";
@@ -1354,63 +1533,13 @@ export default {
         return json(request, env, { error: "Accès de lecture invalide." }, 401);
       }
 
-      const rangeHeader = request.headers.get("Range");
-      const byteRange = rangeHeader
-        ? parseByteRange(rangeHeader, row.size)
-        : null;
-
-      if (rangeHeader && !byteRange) {
-        return new Response(null, {
-          status: 416,
-          headers: {
-            "Accept-Ranges": "bytes",
-            "Content-Range": `bytes */${row.size}`,
-            ...(corsHeaders(request, env) ?? {}),
-          },
-        });
-      }
-
-      const object = await env.FILES_BUCKET.get(
-        row.r2_key,
-        byteRange ? { range: byteRange } : undefined
+      return createMediaResponse(
+        request,
+        env,
+        row,
+        mediaMimeType,
+        "private, no-store"
       );
-
-      if (!object) {
-        console.log(
-          JSON.stringify({
-            event: "r2-object-missing",
-            r2Key: row.r2_key,
-          })
-        );
-        return json(request, env, { error: "Fichier indisponible." }, 404);
-      }
-
-      const headers = new Headers(corsHeaders(request, env) ?? {});
-      headers.set("Accept-Ranges", "bytes");
-      headers.set("Cache-Control", "private, no-store");
-      headers.set("Content-Type", mediaMimeType);
-      headers.set(
-        "Content-Disposition",
-        `inline; filename*=UTF-8''${encodeURIComponent(row.original_name)}`
-      );
-      headers.set(
-        "Content-Length",
-        String(byteRange?.length ?? object.size)
-      );
-
-      if (byteRange) {
-        headers.set(
-          "Content-Range",
-          `bytes ${byteRange.offset}-${
-            byteRange.offset + byteRange.length - 1
-          }/${row.size}`
-        );
-      }
-
-      return new Response(object.body, {
-        status: byteRange ? 206 : 200,
-        headers,
-      });
     }
 
     if (request.method === "POST" && url.pathname.startsWith("/download-transfer/")) {

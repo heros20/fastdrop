@@ -157,6 +157,16 @@ function corsHeaders(request: Request, env: Env) {
   };
 }
 
+function publicMediaCorsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,HEAD,OPTIONS",
+    "Access-Control-Allow-Headers": "Range",
+    "Access-Control-Expose-Headers":
+      "Accept-Ranges, Content-Length, Content-Range, Content-Type",
+  };
+}
+
 function json(request: Request, env: Env, data: unknown, status = 200) {
   const headers = corsHeaders(request, env);
 
@@ -379,9 +389,12 @@ function createMediaHeaders(
   row: StreamFile,
   mediaMimeType: string,
   cacheControl: string,
-  contentLength: number
+  contentLength: number,
+  publicAccess = false
 ) {
-  const headers = new Headers(corsHeaders(request, env) ?? {});
+  const headers = new Headers(
+    publicAccess ? publicMediaCorsHeaders() : (corsHeaders(request, env) ?? {})
+  );
   headers.set("Accept-Ranges", "bytes");
   headers.set("Cache-Control", cacheControl);
   headers.set("Content-Type", mediaMimeType);
@@ -401,7 +414,8 @@ async function createMediaResponse(
   env: Env,
   row: StreamFile,
   mediaMimeType: string,
-  cacheControl: string
+  cacheControl: string,
+  publicAccess = false
 ) {
   if (request.method === "HEAD") {
     const object = await env.FILES_BUCKET.head(row.r2_key);
@@ -417,7 +431,8 @@ async function createMediaResponse(
         row,
         mediaMimeType,
         cacheControl,
-        object.size
+        object.size,
+        publicAccess
       ),
     });
   }
@@ -431,7 +446,9 @@ async function createMediaResponse(
       headers: {
         "Accept-Ranges": "bytes",
         "Content-Range": `bytes */${row.size}`,
-        ...(corsHeaders(request, env) ?? {}),
+        ...(publicAccess
+          ? publicMediaCorsHeaders()
+          : (corsHeaders(request, env) ?? {})),
       },
     });
   }
@@ -457,7 +474,8 @@ async function createMediaResponse(
     row,
     mediaMimeType,
     cacheControl,
-    byteRange?.length ?? object.size
+    byteRange?.length ?? object.size,
+    publicAccess
   );
 
   if (byteRange) {
@@ -835,9 +853,16 @@ async function getStoredParts(env: Env, fileId: string) {
 export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
+    const isPublicMediaRequest =
+      url.pathname.startsWith("/public-stream/") &&
+      (request.method === "GET" ||
+        request.method === "HEAD" ||
+        request.method === "OPTIONS");
 
     if (request.method === "OPTIONS") {
-      const headers = corsHeaders(request, env);
+      const headers = isPublicMediaRequest
+        ? publicMediaCorsHeaders()
+        : corsHeaders(request, env);
 
       if (!headers) {
         return new Response(null, { status: 403 });
@@ -849,7 +874,11 @@ export default {
       });
     }
 
-    if (request.headers.get("Origin") && !corsHeaders(request, env)) {
+    if (
+      request.headers.get("Origin") &&
+      !isPublicMediaRequest &&
+      !corsHeaders(request, env)
+    ) {
       return new Response(JSON.stringify({ error: "Origine non autorisée." }), {
         status: 403,
         headers: {
@@ -1594,7 +1623,8 @@ export default {
         env,
         row,
         mediaMimeType,
-        "public, max-age=300, no-transform"
+        "public, max-age=300, no-transform",
+        true
       );
     }
 

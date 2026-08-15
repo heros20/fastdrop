@@ -42,3 +42,4 @@ next-env.d.ts
 
 apps/worker/.wrangler/
 .codex-logs/
+.vercel
